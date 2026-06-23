@@ -1,0 +1,62 @@
+# 机构Alpha追踪量化系统 — 配置文件
+
+# 数据源
+data:
+  lhb_cache_dir: "data/lhb"
+  daily_cache_dir: "data/daily"
+  level2_dir: "data/level2"
+  processed_dir: "data/processed"
+
+# 拆单检测参数（阶段B：Level-2聚类）
+split_detection:
+  time_window_ms: 500        # 委托时间窗口（毫秒）
+  min_cluster_size: 5         # 最小拆单笔数
+  dbscan_eps: 60              # DBSCAN时间邻域（秒）
+  dbscan_min_samples: 3       # DBSCAN最小样本
+  quantity_tolerance: 0.15    # 数量模式容忍度
+
+# Alpha归因参数
+alpha:
+  horizons: [1, 5, 10, 20, 60]  # 收益计算周期（天）; 测试用 [1, 5]
+  dynamic_lookback: 90           # 动态评分回溯天数
+  dynamic_half_life: 30          # 时间衰减半衰期（天）
+  benchmark: "sh000852"          # 基准指数（中证1000）
+  min_trades: 3                  # 最少交易次数阈值
+
+# 信号生成
+signal:
+  min_signal_strength: 0.3    # 最低信号强度阈值
+  min_confidence: 0.6          # 最低识别置信度
+  decay_half_life: 5           # 信号半衰期（交易日）
+  resonance_bonus_max: 0.3     # 共振加成上限
+  tier_weights:                # 机构等级权重
+    S: 1.5
+    A: 1.0
+    B: 0.5
+    C: 0.0
+    D: -0.5
+
+# 交易执行
+trading:
+  commission: 0.0003           # 万分3佣金
+  slippage: 0.001              # 千1滑点
+  stop_loss: 0.08              # 8%止损
+  take_profit: 0.15            # 15%止盈
+  max_holding_days: 20         # 最长持有20天
+  max_position_ratio: 0.3      # 单票最大仓位30%
+  initial_capital: 1_000_000   # 初始资金100万
+
+# 风控
+risk:
+  max_daily_loss: 0.03         # 单日最大亏损3%
+  max_monthly_drawdown: 0.08   # 月度最大回撤8%
+  alpha_decay_window: 10       # Alpha衰减检测窗口
+  alpha_decay_threshold: -0.05 # 衰减阈值
+  crowding_lookback: 20        # 拥挤度检测窗口
+  crowding_threshold: 0.8      # 拥挤度阈值
+
+# 股票池过滤
+universe:
+  exclude_st: true             # 排除ST
+  exclude_new_ipo_days: 60     # 排除上市不足N天的新股
+  min_daily_volume: 10_000_000 # 最小日成交额1000万
