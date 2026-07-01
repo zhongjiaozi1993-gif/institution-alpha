@@ -54,28 +54,88 @@ class BacktestEngine:
         signals = signals.copy()
         signals["lhb_date"] = pd.to_datetime(signals["lhb_date"])
 
-        positions = {}  # {stock: {entry_date, entry_price, shares, signal_strength, ...}}
+        positions = {}
         cash = self.initial_capital
         nav_history = []
         trades = []
+        pending_signals = []  # 等待T+1开盘建仓的信号
 
         trading_days = self._get_trading_days(price_data, start_date, end_date)
+        if len(trading_days) == 0:
+            return pd.DataFrame(), pd.DataFrame()
 
-        for today in trading_days:
-            # 1. 检查持仓止损/止盈/到期
+        # 构建每只股票 date → row 的查找表，加速回测
+        price_lookup = {}
+        for stock, df in price_data.items():
+            if df.empty:
+                continue
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"])
+            price_lookup[stock] = df.set_index("date")
+
+        for day_idx, today in enumerate(trading_days):
+            # ==== Step 1: 执行前一交易日信号的T+1建仓 ====
+            for sig in pending_signals:
+                if len(positions) >= self.max_positions:
+                    break
+                if cash <= 0:
+                    break
+
+                stock = sig["stock_code"]
+                if stock not in price_lookup:
+                    continue
+
+                px = price_lookup[stock]
+                if today not in px.index:
+                    continue
+
+                row = px.loc[today]
+                entry_price = float(row["open"]) * (1 + self.slippage)
+
+                position_ratio = min(sig.get("strength", 0.3), 0.3)
+                allocation = cash * position_ratio / max(len(pending_signals), 1)
+                shares = int(allocation / entry_price / 100) * 100
+                if shares < 100:
+                    continue
+
+                cost = entry_price * shares * (1 + self.commission)
+                if cost > cash * 0.3:
+                    cost = cash * 0.3
+                    shares = int(cost / entry_price / (1 + self.commission) / 100) * 100
+                    cost = entry_price * shares * (1 + self.commission)
+
+                if shares < 100:
+                    continue
+
+                cash -= cost
+                positions[stock] = {
+                    "entry_date": today,
+                    "entry_price": entry_price,
+                    "shares": shares,
+                    "cost": cost,
+                    "signal_strength": sig.get("strength", 0.5),
+                    "seat_name": sig.get("seat_name", ""),
+                    "tier": sig.get("tier", "B"),
+                    "stop_loss_price": entry_price * (1 - self.stop_loss),
+                    "take_profit_price": entry_price * (1 + self.take_profit),
+                }
+
+            pending_signals = []
+
+            # ==== Step 2: 检查持仓止损/止盈/到期 ====
             for stock, pos in list(positions.items()):
                 exit_reason = None
                 exit_price = None
 
-                if stock not in price_data:
+                if stock not in price_lookup:
                     continue
-                prices = price_data[stock]
-                today_prices = prices[prices["date"] == today]
-                if today_prices.empty:
-                    continue
-                row = today_prices.iloc[0]
 
-                days_held = len(prices[(prices["date"] > pos["entry_date"]) & (prices["date"] <= today)])
+                px = price_lookup[stock]
+                if today not in px.index:
+                    continue
+
+                row = px.loc[today]
+                days_held = len(px.loc[pos["entry_date"]:today].index) - 1
 
                 if row["low"] <= pos["stop_loss_price"]:
                     exit_reason = "stop_loss"
@@ -88,7 +148,6 @@ class BacktestEngine:
                     exit_price = row["close"]
 
                 if exit_reason:
-                    # 卖出
                     sell_amt = exit_price * pos["shares"] * (1 - self.commission - self.slippage)
                     pnl = sell_amt - pos["cost"]
                     pnl_pct = pnl / pos["cost"]
@@ -104,73 +163,36 @@ class BacktestEngine:
                         "pnl": pnl,
                         "pnl_pct": pnl_pct,
                         "exit_reason": exit_reason,
-                        "holding_days": days_held,
+                        "holding_days": max(days_held, 1),
                         "signal_strength": pos["signal_strength"],
                     })
                     del positions[stock]
 
-            # 2. 检查新信号（T日信号 → T+1日建仓）
-            # 实际回测中，今天的date对应的是T日收盘后出的龙虎榜，
-            # T+1（下一个交易日）开盘买入
+            # ==== Step 3: 收集今日龙虎榜信号 → T+1开盘建仓 ====
             day_signals = signals[signals["lhb_date"] == today]
-
             if not day_signals.empty:
-                next_day_idx = trading_days.get_loc(today) + 1
-                if next_day_idx < len(trading_days):
-                    next_day = trading_days[next_day_idx]
-
+                # 检查是否有下一个交易日
+                if day_idx + 1 < len(trading_days):
                     for _, sig in day_signals.iterrows():
-                        if len(positions) >= self.max_positions:
-                            break
-                        if cash <= 0:
-                            break
-
-                        stock = sig["stock_code"]
-                        if stock not in price_data:
-                            continue
-
-                        next_prices = price_data[stock][price_data[stock]["date"] == next_day]
-                        if next_prices.empty:
-                            continue
-                        next_row = next_prices.iloc[0]
-                        entry_price = next_row["open"] * (1 + self.slippage)
-
-                        position_ratio = min(sig.get("strength", 0.3), 0.3)
-                        allocation = cash * position_ratio / max(len(day_signals), 1)
-                        shares = int(allocation / entry_price / 100) * 100
-                        if shares < 100:
-                            continue
-
-                        cost = entry_price * shares * (1 + self.commission)
-                        if cost > cash * 0.3:  # 单票不超过30%资金
-                            cost = cash * 0.3
-                            shares = int(cost / entry_price / (1 + self.commission) / 100) * 100
-                            cost = entry_price * shares * (1 + self.commission)
-
-                        if shares < 100:
-                            continue
-
-                        cash -= cost
-                        positions[stock] = {
-                            "entry_date": next_day,
-                            "entry_price": entry_price,
-                            "shares": shares,
-                            "cost": cost,
-                            "signal_strength": sig.get("strength", 0.5),
+                        pending_signals.append({
+                            "stock_code": sig["stock_code"],
+                            "strength": sig.get("strength", 0.3),
                             "seat_name": sig.get("seat_name", ""),
                             "tier": sig.get("tier", "B"),
-                            "stop_loss_price": entry_price * (1 - self.stop_loss),
-                            "take_profit_price": entry_price * (1 + self.take_profit),
-                        }
+                        })
 
-            # 3. 计算当日净值
-            position_value = 0
+            # ==== Step 4: 计算当日净值 ====
+            position_value = 0.0
             for stock, pos in positions.items():
-                if stock in price_data:
-                    prices = price_data[stock]
-                    today_row = prices[prices["date"] == today]
-                    if not today_row.empty:
-                        position_value += pos["shares"] * today_row.iloc[0]["close"]
+                if stock in price_lookup:
+                    px = price_lookup[stock]
+                    if today in px.index:
+                        position_value += pos["shares"] * float(px.loc[today, "close"])
+                    else:
+                        # 缺行情时用最近5日内的收盘价，避免估值归零
+                        nearby = px.index[px.index <= today]
+                        if len(nearby) > 0 and (today - nearby[-1]).days <= 5:
+                            position_value += pos["shares"] * float(px.loc[nearby[-1], "close"])
 
             total_value = cash + position_value
             nav_history.append({
@@ -191,13 +213,15 @@ class BacktestEngine:
         start_date: str,
         end_date: str,
     ) -> pd.DatetimeIndex:
-        """获取交易日历"""
+        """获取所有股票交易日的并集"""
+        all_dates = set()
         for df in price_data.values():
-            if not df.empty:
-                all_dates = pd.to_datetime(df["date"])
-                mask = (all_dates >= start_date) & (all_dates <= end_date)
-                return pd.DatetimeIndex(sorted(all_dates[mask].unique()))
-        return pd.DatetimeIndex([])
+            if df.empty or "date" not in df.columns:
+                continue
+            dates = pd.to_datetime(df["date"])
+            mask = (dates >= start_date) & (dates <= end_date)
+            all_dates.update(dates[mask])
+        return pd.DatetimeIndex(sorted(all_dates))
 
 
 def calculate_nav_metrics(nav_df: pd.DataFrame) -> dict:
@@ -216,13 +240,11 @@ def calculate_nav_metrics(nav_df: pd.DataFrame) -> dict:
     ann_vol = daily_returns.std() * np.sqrt(252)
     sharpe = (daily_returns.mean() / daily_returns.std() * np.sqrt(252)) if daily_returns.std() > 0 else 0
 
-    # Max drawdown
     cum = nav / nav.iloc[0]
     peak = cum.expanding().max()
     dd = ((cum - peak) / peak)
     max_dd = dd.min()
 
-    # Calmar
     calmar = ann_ret / abs(max_dd) if max_dd != 0 else 0
 
     return {

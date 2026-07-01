@@ -74,7 +74,12 @@ def load_stock_daily(
     """
     cache_dir = cache_dir or DEFAULT_CACHE_DIR
     cache_dir.mkdir(parents=True, exist_ok=True)
+    raw_symbol = str(symbol)
+    symbol = raw_symbol.zfill(6)
     cache_path = cache_dir / f"{symbol}.parquet"
+    legacy_cache_path = cache_dir / f"{raw_symbol}.parquet"
+    if not cache_path.exists() and legacy_cache_path.exists():
+        cache_path = legacy_cache_path
 
     sina_sym = _to_sina_symbol(symbol)
 
@@ -83,8 +88,10 @@ def load_stock_daily(
         cached = pd.read_parquet(cache_path)
         if 'date' in cached.columns:
             cached["date"] = pd.to_datetime(cached["date"])
-            date_strs = cached["date"].astype(str)
-            if start_date in date_strs.values or end_date in date_strs.values:
+            start_ts = pd.to_datetime(start_date)
+            end_ts = pd.to_datetime(end_date)
+            cached_window = cached[(cached["date"] >= start_ts) & (cached["date"] <= end_ts)]
+            if not cached_window.empty:
                 need_download = False
 
     if need_download:
@@ -105,11 +112,8 @@ def load_stock_daily(
 
             raw["date"] = pd.to_datetime(raw["date"])
 
-            # hfq 返回的价格是分，转为元
-            if adjust == "hfq":
-                for col in ["open", "high", "low", "close"]:
-                    if col in raw.columns:
-                        raw[col] = raw[col] / 100
+            # 注意: akshare >=1.14 的 stock_zh_a_daily hfq 已直接返回元
+            # 不再需要 /100 转换。旧版缓存（分单位）通过删除缓存重建来处理
 
             raw = raw.sort_values("date")
 

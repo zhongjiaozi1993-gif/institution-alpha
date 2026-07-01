@@ -30,7 +30,7 @@ TRADING_SECONDS = CLOSE_TIME - OPEN_TIME  # 19800
 
 # 大单过滤阈值（金额单位: 分, 数量单位: 股）
 BIG_AMOUNT = 20 * 10000 * 10000       # 20万元
-BIG_VOLUME = 10 * 10000 * 10000       # 10万股
+BIG_VOLUME = 10 * 10000               # 10万股
 
 
 def _time_to_seconds(time_str: str) -> float:
@@ -170,6 +170,10 @@ def _cluster_direction(
             'median_order_qty': round(float(np.median(volumes)), 0),
             'qty_cv': round(float(np.std(volumes) / np.mean(volumes)) if np.mean(volumes) > 0 else 0, 2),
             'mid_time_sec': int((times.min() + times.max()) / 2),
+            # 订单时间间隔波动（秒），衡量拆单节奏是机械等间隔还是随机
+            'order_interval_std': round(float(np.std(np.diff(np.sort(times.values)))) if n > 1 else 0, 1),
+            # HHI拆单集中度：1=全部集中一笔，≈1/n=完全均匀拆分
+            'order_hhi': round(float(np.sum((volumes / volumes.sum()) ** 2)), 4),
         })
 
     return results
@@ -208,5 +212,4 @@ def detect_all_stocks(
     if not df.empty:
         df = df.sort_values('total_amount_wan', ascending=False).reset_index(drop=True)
     return df
-
 

@@ -63,9 +63,9 @@ HQDATA_TYPES = {
 # 大单/超大单阈值（金额单位: 分, 数量单位: 股）
 # ═══════════════════════════════════════════════════════════════
 SUPER_AMOUNT = 100 * 10000 * 10000    # 100万元 (以分为单位)
-SUPER_VOLUME = 50 * 10000 * 10000     # 50万股 (以股为单位)
+SUPER_VOLUME = 50 * 10000             # 50万股 (以股为单位)
 BIG_AMOUNT = 20 * 10000 * 10000       # 20万元
-BIG_VOLUME = 10 * 10000 * 10000       # 10万股
+BIG_VOLUME = 10 * 10000               # 10万股
 
 
 def _market_from_code(code: str) -> str:
@@ -167,9 +167,35 @@ def read_level2_day(
 # 委托-成交匹配
 # ═══════════════════════════════════════════════════════════════
 
+def _usable_id_ratio(series: pd.Series) -> float:
+    """Return ratio of non-empty, non-zero order ids."""
+    if series.empty:
+        return 0.0
+    values = series.astype(str).str.strip()
+    usable = values.notna() & (values != "") & (values != "0") & (values.str.lower() != "nan")
+    return float(usable.mean())
+
+
+def _choose_order_match_key(wtdf: pd.DataFrame) -> str:
+    """
+    Choose the order id column used by trade buy/sell sequence numbers.
+
+    Older samples use 委托编号. The 2025 Wind archives have 委托编号=0 and
+    require 交易所委托号 instead.
+    """
+    candidates = ["委托编号", "交易所委托号"]
+    ratios = {col: _usable_id_ratio(wtdf[col]) for col in candidates if col in wtdf.columns}
+    if not ratios:
+        raise KeyError("逐笔委托缺少 委托编号/交易所委托号")
+    return max(ratios, key=ratios.get)
+
+
 def match_orders_to_trades(wtdf: pd.DataFrame, cjdf: pd.DataFrame) -> pd.DataFrame:
     """
-    将逐笔委托与逐笔成交按交易所委托号匹配，得到成交的委托明细
+    将逐笔委托与逐笔成交匹配，得到成交的委托明细。
+
+    默认用 委托编号；当 委托编号 基本不可用（如2025样本全为0）时，
+    自动回退到 交易所委托号。
 
     wtdf: 逐笔委托 DataFrame
     cjdf: 逐笔成交 DataFrame（已过滤撤单）
@@ -178,17 +204,20 @@ def match_orders_to_trades(wtdf: pd.DataFrame, cjdf: pd.DataFrame) -> pd.DataFra
     if wtdf.empty or cjdf.empty:
         return pd.DataFrame()
 
-    # 成交按叫买/叫卖序号汇总
-    buy_agg = cjdf.groupby('叫买序号').agg({'成交数量': 'sum', '成交金额': 'sum'})
-    sell_agg = cjdf.groupby('叫卖序号').agg({'成交数量': 'sum', '成交金额': 'sum'})
-    cj_agg = pd.concat([sell_agg, buy_agg])
-    cj_agg.insert(0, '交易所委托号', cj_agg.index.values)
+    match_key = _choose_order_match_key(wtdf)
+
+    buy_agg = cjdf.groupby('叫买序号', dropna=True).agg({'成交数量': 'sum', '成交金额': 'sum'})
+    sell_agg = cjdf.groupby('叫卖序号', dropna=True).agg({'成交数量': 'sum', '成交金额': 'sum'})
+    cj_agg = pd.concat([buy_agg, sell_agg])
+    cj_agg = cj_agg.groupby(cj_agg.index).agg({'成交数量': 'sum', '成交金额': 'sum'})
+    cj_agg.insert(0, match_key, cj_agg.index.astype(str))
 
     # 去除沪市撤单类型
     wt_valid = wtdf[wtdf['委托类型'] != 'D'].copy() if '委托类型' in wtdf.columns else wtdf.copy()
 
-    # inner join 匹配
-    matched = pd.merge(wt_valid, cj_agg, on='交易所委托号', how='inner')
+    wt_valid[match_key] = wt_valid[match_key].astype(str)
+    matched = pd.merge(wt_valid, cj_agg, on=match_key, how='inner')
+    matched['match_key'] = match_key
     matched['委托金额'] = matched['委托数量'] * matched['委托价格']
     return matched
 
@@ -213,6 +242,10 @@ def classify_orders_by_size(
     """
     if wtcj.empty:
         return {'super': pd.DataFrame(), 'big': pd.DataFrame(), 'small': pd.DataFrame()}
+
+    wtcj = wtcj.copy()
+    if '委托金额' not in wtcj.columns and {'委托价格', '委托数量'}.issubset(wtcj.columns):
+        wtcj['委托金额'] = wtcj['委托价格'].astype(float) * wtcj['委托数量'].astype(float)
 
     is_super = (wtcj['委托金额'] >= super_amount) | (wtcj['委托数量'] >= super_volume)
     is_big = (wtcj['委托金额'] >= big_amount) | (wtcj['委托数量'] >= big_volume)
@@ -246,23 +279,27 @@ def compute_big_order_summary(wtcj: pd.DataFrame) -> dict:
             return 0, 0, 0, 0
         buy = df[df['委托代码'] == 'B']
         sell = df[df['委托代码'] == 'S']
-        b_amt = buy['成交金额'].sum() / 1e8  # 转亿
-        s_amt = sell['成交金额'].sum() / 1e8
+        b_amt_raw = buy['成交金额'].sum()
+        s_amt_raw = sell['成交金额'].sum()
         b_vol = buy['成交数量'].sum()
         s_vol = sell['成交数量'].sum()
-        return b_amt, s_amt, b_vol, s_vol
+        return b_amt_raw, s_amt_raw, b_vol, s_vol
 
-    def _avg_price(amt_e8, vol):
+    def _amt_yi(raw_amount):
+        # 成交价格=元×10000，成交金额=成交价格×股数，所以 /1e12=亿元。
+        return round(raw_amount / 1e12, 2)
+
+    def _avg_price(raw_amount, vol):
         if vol > 0:
-            return round(amt_e8 / vol * 1e8 / 10000, 2)  # 转元
+            return round(raw_amount / vol / 10000, 2)  # 转元
         return 0
 
     sb, ss, sbv, ssv = _buy_sell_amount_volume(classified['super'])
     bb, bs, bbv, bsv = _buy_sell_amount_volume(classified['big'])
 
     return {
-        'super_buy': round(sb, 2), 'super_sell': round(ss, 2),
-        'big_buy': round(bb, 2), 'big_sell': round(bs, 2),
+        'super_buy': _amt_yi(sb), 'super_sell': _amt_yi(ss),
+        'big_buy': _amt_yi(bb), 'big_sell': _amt_yi(bs),
         'super_buy_avg_price': _avg_price(sb, sbv),
         'super_sell_avg_price': _avg_price(ss, ssv),
         'big_buy_avg_price': _avg_price(bb, bbv),
@@ -347,17 +384,17 @@ def compute_period_flow(
 
     prices = period['成交价格'].values
     volume_wan = period['成交数量'].sum() / 10000
-    amount_yi = period['成交金额'].sum() / 1e8
+    amount_yi = period['成交金额'].sum() / 1e12
 
     buy_grp = period.groupby('叫买序号')
     sell_grp = period.groupby('叫卖序号')
     buy_amts = buy_grp['成交金额'].sum()
     sell_amts = sell_grp['成交金额'].sum()
 
-    super_buy = buy_amts[buy_amts > SUPER_AMOUNT].sum() / 1e8
-    super_sell = sell_amts[sell_amts > SUPER_AMOUNT].sum() / 1e8
-    big_buy = buy_amts[buy_amts > BIG_AMOUNT].sum() / 1e8
-    big_sell = sell_amts[sell_amts > BIG_AMOUNT].sum() / 1e8
+    super_buy = buy_amts[buy_amts > SUPER_AMOUNT].sum() / 1e12
+    super_sell = sell_amts[sell_amts > SUPER_AMOUNT].sum() / 1e12
+    big_buy = buy_amts[buy_amts > BIG_AMOUNT].sum() / 1e12
+    big_sell = sell_amts[sell_amts > BIG_AMOUNT].sum() / 1e12
 
     return {
         'start_time': start_time, 'end_time': end_time,

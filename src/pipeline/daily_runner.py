@@ -21,11 +21,7 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.lhb_collector import (
-    download_lhb_seat_detail_range, download_lhb_seat_detail,
-    download_lhb_jgmx, build_trade_records,
-    download_lhb_stocks_daily, download_lhb_seat_stats,
-)
+from src.data.lhb_collector import download_lhb_jgmx, build_trade_records
 from src.data.price_loader import load_stock_daily, load_index_daily
 from src.alpha.return_calculator import calculate_future_returns
 from src.alpha.alpha_profiler import build_alpha_registry, rank_seats
@@ -48,6 +44,47 @@ def load_config(config_path: str | None = None) -> dict:
     return {}
 
 
+
+
+def load_cached_lhb_seat_details(
+    start_date: str,
+    end_date: str,
+    cache_dir: Path,
+) -> pd.DataFrame:
+    """Load cached per-seat LHB detail files without network access."""
+    if not cache_dir.exists():
+        return pd.DataFrame()
+
+    start_ts = pd.to_datetime(start_date)
+    end_ts = pd.to_datetime(end_date)
+    frames = []
+
+    for path in sorted(cache_dir.glob("lhb_seat_detail_*.parquet")):
+        df = pd.read_parquet(path)
+        if df.empty or "lhb_date" not in df.columns:
+            continue
+        df = df.copy()
+        df["lhb_date"] = pd.to_datetime(df["lhb_date"])
+        df = df[(df["lhb_date"] >= start_ts) & (df["lhb_date"] <= end_ts)]
+        if not df.empty:
+            frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
+
+    records = pd.concat(frames, ignore_index=True)
+    records["stock_code"] = records["stock_code"].astype(str).str.zfill(6)
+    records["buy_amount"] = pd.to_numeric(records.get("buy_amount", 0), errors="coerce").fillna(0)
+    records["sell_amount"] = pd.to_numeric(records.get("sell_amount", 0), errors="coerce").fillna(0)
+    records["net_amount"] = records["buy_amount"] - records["sell_amount"]
+    records = records[records["buy_amount"] > 0]
+
+    keep_cols = [
+        "stock_code", "stock_name", "lhb_date", "seat_name",
+        "buy_amount", "sell_amount", "net_amount",
+    ]
+    return records[keep_cols].drop_duplicates().reset_index(drop=True)
+
 def run_pipeline(
     start_date: str,
     end_date: str,
@@ -68,18 +105,31 @@ def run_pipeline(
     lookback = alpha_cfg.get("dynamic_lookback", 90)
 
     # ============================================================
-    # Step 1: 下载机构席位买卖明细（Sina汇总数据）
+    # Step 1: 加载机构席位买卖明细（优先使用本地真实营业部缓存）
     # ============================================================
-    logger.info(f"Step 1: 下载机构席位买卖明细")
-    jgmx = download_lhb_jgmx(force_refresh=True)
+    lhb_cache_dir = PROJECT_ROOT / cfg.get("data", {}).get("lhb_cache_dir", "data/lhb")
+    prefer_seat_detail = cfg.get("data", {}).get("prefer_seat_detail", True)
+    trade_records = pd.DataFrame()
 
-    if jgmx.empty:
-        logger.error("未获取到机构席位买卖明细")
-        return {}
+    if prefer_seat_detail:
+        trade_records = load_cached_lhb_seat_details(start_date, end_date, lhb_cache_dir)
+        if not trade_records.empty:
+            logger.info(
+                f"Step 1: 使用本地席位明细缓存: {len(trade_records)} 条, "
+                f"{trade_records['seat_name'].nunique()} 个营业部"
+            )
 
-    logger.info(f"机构席位明细列: {list(jgmx.columns)}")
+    if trade_records.empty:
+        force_refresh_lhb = cfg.get("data", {}).get("force_refresh_lhb", False)
+        logger.info(f"Step 1: 退回机构汇总明细 force_refresh={force_refresh_lhb}")
+        jgmx = download_lhb_jgmx(force_refresh=force_refresh_lhb)
 
-    trade_records = build_trade_records(jgmx, start_date, end_date)
+        if jgmx.empty:
+            logger.error("未获取到机构席位买卖明细")
+            return {}
+
+        logger.info(f"机构汇总明细列: {list(jgmx.columns)}")
+        trade_records = build_trade_records(jgmx, start_date, end_date)
 
     if trade_records.empty:
         logger.error(f"区间 {start_date}~{end_date} 无交易记录")
@@ -105,6 +155,14 @@ def run_pipeline(
             price_data[str(code)] = df
 
     logger.info(f"成功加载 {len(price_data)} 只股票日线")
+    available_price_end = None
+    if price_data:
+        available_price_end = max(
+            pd.to_datetime(df["date"]).max()
+            for df in price_data.values()
+            if not df.empty
+        )
+        logger.info(f"行情最大可用交易日: {available_price_end.date()}")
 
     # ============================================================
     # Step 3: 下载基准指数
@@ -212,7 +270,8 @@ def run_pipeline(
         max_positions=10,
     )
 
-    nav_df, trades_df = engine.run(signals, price_data, start_date, end_date)
+    backtest_end = available_price_end.strftime("%Y-%m-%d") if available_price_end is not None else end_date
+    nav_df, trades_df = engine.run(signals, price_data, start_date, backtest_end)
 
     if nav_df.empty:
         logger.error("回测未产生净值数据")
@@ -227,6 +286,8 @@ def run_pipeline(
     metrics["market_regime"] = regime
     metrics["total_signals"] = len(signals)
     metrics["total_seats_rated"] = len(registry)
+    metrics["backtest_start"] = start_date
+    metrics["backtest_end"] = backtest_end
 
     print_metrics(metrics)
 

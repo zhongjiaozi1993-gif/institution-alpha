@@ -7,6 +7,8 @@ dist/
 build/
 
 # 数据（本地生成，不上传）
+models/
+data/
 data/processed/
 data/daily/
 data/lhb/

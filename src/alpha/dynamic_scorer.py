@@ -34,7 +34,7 @@ def calculate_dynamic_score(
     today = pd.to_datetime(today)
 
     cutoff = today - pd.Timedelta(days=lookback_days)
-    recent = df[df["lhb_date"] >= cutoff]
+    recent = df[df["lhb_date"] >= cutoff].sort_values("lhb_date")
 
     if len(recent) < 3:
         return None
@@ -64,21 +64,27 @@ def calculate_dynamic_score(
     weighted_ret = np.dot(weights, ret)
     weighted_win_rate = np.dot(weights, (ret > 0).astype(float))
 
-    # 回撤控制（基于累计收益）
-    cum_ret = (1 + ret).cumprod()
-    peak = cum_ret.max()
-    dd = (cum_ret[-1] - peak) / peak if peak > 0 else -1
+    # 回撤控制（按时间顺序计算累计收益路径的最大回撤）
+    cum_ret = pd.Series((1 + ret).cumprod())
+    peak = cum_ret.cummax()
+    drawdowns = (cum_ret - peak) / peak.replace(0, np.nan)
+    dd = drawdowns.min() if not drawdowns.empty else 0
+    if pd.isna(dd):
+        dd = 0
 
-    # 综合评分 0-100
-    score_ret = min(max(weighted_ret * 40 / 0.15, -20), 60)  # 15%收益=40分
-    score_wr = min(weighted_win_rate * 30 / 0.7, 30)          # 70%胜率=30分
-    score_dd = min(max((1 + dd) * 20, 0), 20)                  # 无回撤=20分
-    score_exp = min(np.log1p(len(recent)) / np.log1p(20) * 10, 10)  # 交易经验
+    n = len(recent)
 
-    score = min(max(
-        score_ret + score_wr + score_dd + score_exp,
-        0
-    ), 100)
+    # 综合评分 0-100（各维度更难满分，拉开区分度）
+    score_ret = min(max(weighted_ret * 40 / 0.30, -20), 50)   # 30%收益=40分
+    score_wr = min(weighted_win_rate * 30 / 0.85, 30)          # 85%胜率=30分
+    score_dd = min(max((1 + dd) * 25, 0), 25)                  # 无回撤=25分
+    score_exp = min(np.log1p(n) / np.log1p(50) * 15, 15)       # 50笔交易=15分
+
+    raw_score = score_ret + score_wr + score_dd + score_exp
+
+    # 小样本惩罚系数：少于10笔交易扣分，sqrt平滑过渡
+    confidence = min(1.0, (n / 10) ** 0.5)
+    score = min(max(raw_score * confidence, 0), 100)
 
     tier = classify_tier(score)
 
@@ -108,11 +114,11 @@ TIER_DESC = {
 
 def classify_tier(score: float) -> str:
     """根据动态评分分类机构等级"""
-    if score >= 80:
+    if score >= 70:
         return "S"
-    elif score >= 60:
+    elif score >= 50:
         return "A"
-    elif score >= 40:
+    elif score >= 35:
         return "B"
     elif score >= 20:
         return "C"
