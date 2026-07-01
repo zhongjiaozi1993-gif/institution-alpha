@@ -166,7 +166,7 @@ def load_v4(stock: str) -> pd.DataFrame:
         for c in inst.get("all_clusters", []):
             rows.append({
                 "version": "v4",
-                "anon_id": anon,
+                "anon_id": f"{stock}:{anon}",
                 "stock_code": stock,
                 "date": str(c["date"]),
                 "direction": c["direction"],
@@ -207,7 +207,7 @@ def load_v6(stock: str) -> pd.DataFrame:
         for op in inst.get("operations", []):
             rows.append({
                 "version": "v6",
-                "anon_id": anon,
+                "anon_id": f"{stock}:{anon}",
                 "stock_code": stock,
                 "date": str(op["date"]),
                 "direction": op["direction"],
