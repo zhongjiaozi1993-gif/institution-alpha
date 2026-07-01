@@ -1,0 +1,2 @@
+version,n_anon,n_high,n_medium,n_low,low_ratio,avg_active_days,median_active_days,avg_buy_ratio,avg_net_buy_wan,win_5d,fragmentation_score,avg_fwd_1d,top10_avg_fwd_1d,avg_fwd_3d,top10_avg_fwd_3d,avg_fwd_5d,top10_avg_fwd_5d,avg_fwd_10d,top10_avg_fwd_10d
+v6,24,6,18,0,0.0,16.38,8.0,0.5,10052.04,0.58,0.0,0.21,0.87,1.85,2.13,3.66,4.56,10.67,8.95
