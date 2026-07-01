@@ -21,9 +21,11 @@ Level-2 处理计划执行器 — 按 process_plan.csv 逐日处理 archive
 from __future__ import annotations
 
 import argparse
+import csv
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -63,7 +65,7 @@ def run_day(archive: str, date: str, stocks_plain: list[str],
     """对单日 archive 运行 run_level2_archive_day.py"""
 
     stocks_wind = ",".join(wind_code(s) for s in stocks_plain)
-    output = str(Path(output_dir) / f"level2_ops_{date}.parquet")
+    output = str(Path(output_dir) / f"level2_ops_{date}.csv")
 
     # 如果输出已存在则跳过
     if Path(output).exists():
@@ -135,6 +137,8 @@ def main():
     ok = 0
     skip = 0
     fail = 0
+    failures: list[dict] = []
+    t_start = time.time()
 
     for i, row in enumerate(rows):
         date = row["date"]
@@ -147,12 +151,14 @@ def main():
 
         extract_dir = str(PROJECT / args.temp_dir / date)
 
+        t0 = time.time()
         print(f"[{i+1}/{len(rows)}] {date} ({year}) "
               f"archive={Path(archive).name} stocks={len(stocks)}")
 
-        output_path = year_dir / f"level2_ops_{date}.parquet"
+        output_path = year_dir / f"level2_ops_{date}.csv"
         if output_path.exists():
-            print(f"  -> exists, skip")
+            elapsed = time.time() - t0
+            print(f"  -> exists, skip ({elapsed:.0f}s)")
             skip += 1
             continue
 
@@ -166,11 +172,14 @@ def main():
             python=args.python,
         )
 
+        elapsed = time.time() - t0
         if success:
             ok += 1
+            print(f"  -> done ({elapsed:.0f}s)")
         else:
             fail += 1
-            print(f"  [FAIL]")
+            failures.append({"date": date, "archive": archive, "elapsed_s": round(elapsed, 0)})
+            print(f"  [FAIL] ({elapsed:.0f}s)")
 
         # clean temp dir (unless dry-run)
         if not args.dry_run:
@@ -187,8 +196,19 @@ def main():
         else:
             print(f"\n[WARN] temp_extract has {len(remaining)} leftover dirs")
 
+    # write failure log
+    if failures:
+        fail_path = output_base / "failed_dates.csv"
+        with open(fail_path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["date", "archive", "elapsed_s"])
+            w.writeheader()
+            w.writerows(failures)
+        print(f"\nFailure log: {fail_path} ({len(failures)} dates)")
+
+    total_elapsed = time.time() - t_start
     print(f"\n{'='*60}")
     print(f"Done: OK={ok} SKIP={skip} FAIL={fail} / {len(rows)}")
+    print(f"Total time: {total_elapsed/60:.0f} min ({total_elapsed/3600:.1f} hr)")
     print(f"Output: {output_base}")
 
 
