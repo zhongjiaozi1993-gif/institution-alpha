@@ -23,8 +23,14 @@ DATA_DIR = PROJECT / "data" / "single_stock"
 PRICE_SCALE = 10000
 
 
+def wind_code(stock: str) -> str:
+    """补全交易所后缀: 002516→002516.SZ, 600519→600519.SH"""
+    suffix = "SH" if stock.startswith(("6", "9")) else "SZ"
+    return f"{stock}.{suffix}"
+
+
 def l2_daily_ohlc(stock: str, date_str: str) -> dict | None:
-    cj_path = DATA_DIR / stock / "raw" / date_str / f"{stock}.SZ" / "逐笔成交.csv"
+    cj_path = DATA_DIR / stock / "raw" / date_str / wind_code(stock) / "逐笔成交.csv"
     if not cj_path.exists():
         return None
     for enc in ["gb18030", "gbk", "utf-8"]:

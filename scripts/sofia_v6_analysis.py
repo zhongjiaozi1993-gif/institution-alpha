@@ -243,6 +243,26 @@ STOCK = "002516"
 STOCK_DIR = PROJECT / "data" / "single_stock" / STOCK
 V6_DIR = STOCK_DIR / "sofia_v6"
 
+
+def configure_stock(stock: str) -> None:
+    """Point all analysis inputs/outputs at the requested single-stock workspace."""
+    global STOCK, STOCK_DIR, V6_DIR
+    STOCK = stock
+    STOCK_DIR = PROJECT / "data" / "single_stock" / STOCK
+    V6_DIR = STOCK_DIR / "sofia_v6"
+
+
+def load_json_compat(path: Path):
+    for encoding in ("utf-8", "utf-8-sig", "gb18030", "gbk"):
+        try:
+            with open(path, encoding=encoding) as f:
+                return json.load(f)
+        except UnicodeDecodeError:
+            continue
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return json.load(f)
+
+
 # ═══════════════════════════════════════════════════
 # 0. 数据加载
 # ═══════════════════════════════════════════════════
@@ -261,8 +281,7 @@ def load_data():
         ) * 100  # 百分比
 
     # v6机构注册表
-    with open(V6_DIR / "institution_registry.json") as f:
-        registry = json.load(f)
+    registry = load_json_compat(V6_DIR / "institution_registry.json")
 
     return prices, registry
 
@@ -606,6 +625,7 @@ def analyze_sep08(
     prices: pd.DataFrame,
     registry: list[dict],
     public_evidence: pd.DataFrame | None = None,
+    target_date: str = "20250908",
 ):
     """
     深度分析2025年9月8日超级扫货日。
@@ -616,7 +636,6 @@ def analyze_sep08(
     - N日收益验证这笔扫货是否正确
     - 结合公开公告/新闻判断是否为事件驱动
     """
-    target_date = "20250908"
     px_row = prices[prices["date_str"] == target_date]
     if px_row.empty:
         print(f"  警告: {target_date} 无价格数据")
@@ -684,11 +703,11 @@ def analyze_sep08(
 
     # 输出
     lines = [
-        f"# {STOCK} 2025年9月8日 超级扫货日复盘",
+        f"# {STOCK} {target_date} 事件交易日复盘",
         "",
         f"## 当日概况",
         "",
-        f"- **日期**: 2025-09-08 (周一)",
+        f"- **日期**: {target_date}",
         f"- **收盘价**: {close_px:.2f}元 (HFQ后复权)",
         f"- **当日涨跌**: {chg_pct:+.2f}%",
         f"- **参与机构**: {n_institutions}个",
@@ -785,8 +804,8 @@ def analyze_sep08(
     lines.append("")
 
     # 保存
-    report_path = V6_DIR / "sep08_deepdive.md"
-    report_path.write_text("\n".join(lines))
+    report_path = V6_DIR / f"{target_date}_deepdive.md"
+    report_path.write_text("\n".join(lines), encoding="utf-8")
 
     # 终端输出
     print(f"\n{'='*60}")
@@ -1424,10 +1443,8 @@ def cross_year_match(prices: pd.DataFrame):
         print(f"  ⚠️ {v4_path} 不存在, 跳过跨年匹配")
         return None, None
 
-    with open(v4_path) as f:
-        v4_2026 = json.load(f)
-    with open(V6_DIR / "institution_registry.json") as f:
-        v6_insts = json.load(f)
+    v4_2026 = load_json_compat(v4_path)
+    v6_insts = load_json_compat(V6_DIR / "institution_registry.json")
 
     def get_fp(inst, key="fingerprint"):
         fp = inst.get(key, {})
@@ -1512,7 +1529,7 @@ def cross_year_match(prices: pd.DataFrame):
 
     # 保存匹配结果
     match_out = {k: v for k, v in matches.items()}
-    with open(V6_DIR / "crossyear_match.json", "w") as f:
+    with open(V6_DIR / "crossyear_match.json", "w", encoding="utf-8") as f:
         json.dump(match_out, f, ensure_ascii=False, indent=2)
 
     print(f"\n  匹配结果已保存: {V6_DIR}/crossyear_match.json")
@@ -1561,11 +1578,17 @@ def print_key_conclusions(signal: dict):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="SOFIA v6 分析 — 深度复盘 + Alpha归因 + 买入信号")
+    parser.add_argument("--stock", default=STOCK,
+                        help="股票代码, 例如 002516/301529/300100")
+    parser.add_argument("--event-date", default="20250908",
+                        help="要复盘的事件交易日, 默认 20250908")
     parser.add_argument("--cross-year", action="store_true",
                         help="运行跨年机构匹配 (2026 v4 → 2025 v6)")
     args = parser.parse_args()
+    configure_stock(args.stock)
 
     print("SOFIA v6 分析 — 深度复盘 + Alpha归因 + 买入信号（含市场环境过滤）")
+    print(f"股票: {STOCK}")
     print()
 
     prices, registry = load_data()
@@ -1582,7 +1605,7 @@ def main():
         return
 
     # 1. 9月8日复盘
-    sep08 = analyze_sep08(prices, registry, public_evidence)
+    event_day = analyze_sep08(prices, registry, public_evidence, args.event_date)
 
     # 2. 机构Alpha归因
     alpha_df = compute_institution_alpha(prices, registry)
@@ -1617,11 +1640,11 @@ def main():
         return obj
 
     signal_out = _make_serializable(signal)
-    with open(V6_DIR / "buy_signal.json", "w") as f:
+    with open(V6_DIR / "buy_signal.json", "w", encoding="utf-8") as f:
         json.dump(signal_out, f, ensure_ascii=False, indent=2)
 
     print(f"\n输出已保存: {V6_DIR}/")
-    print(f"  sep08_deepdive.md       — 9月8日复盘")
+    print(f"  {args.event_date}_deepdive.md — 事件交易日复盘")
     print(f"  institution_alpha.csv   — 机构Alpha画像")
     print(f"  buy_signal.json         — 买入信号（含市场环境过滤）")
     print(f"  crossyear_match.json    — 跨年机构匹配 (--cross-year 生成)")

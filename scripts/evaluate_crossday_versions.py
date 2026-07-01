@@ -1,20 +1,27 @@
 """
-跨日匿名机构识别版本评估 (v4 vs v6)
+跨日匿名机构识别版本评估 (v4 vs v6) — OOT 外推验证
 
 读取 v4/v6 的 institution_registry.json，统一字段、计算 L2 口径未来收益，
 输出匿名机构级和版本级的 Alpha 评估报告。
 
-v5 预留接口，当前跳过。
+用法:
+  python3 scripts/evaluate_crossday_versions.py --stocks 002516
+  python3 scripts/evaluate_crossday_versions.py --stocks 301529,300100
+  python3 scripts/evaluate_crossday_versions.py --stocks all --versions v6
 
-输出:
-  - data/processed/l2_daily_ohlc.csv        L2逐笔OHLC基准价
-  - data/processed/crossday_operations_unified.csv  统一操作明细
-  - data/processed/crossday_anon_eval.csv            匿名机构级评估
-  - data/processed/crossday_version_eval.csv         版本级评估
+输出 (每只股票):
+  - data/processed/oot/{stock}/l2_daily_ohlc.csv
+  - data/processed/oot/{stock}/crossday_operations_unified.csv
+  - data/processed/oot/{stock}/crossday_anon_eval.csv
+  - data/processed/oot/{stock}/crossday_version_eval.csv
+
+汇总:
+  - data/processed/oot/v6_oot_summary.csv
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -26,15 +33,22 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 
 DATA_DIR = PROJECT / "data" / "single_stock"
-OUT_DIR = PROJECT / "data" / "processed"
+OOT_DIR = PROJECT / "data" / "processed" / "oot"
 PRICE_SCALE = 10000
 FWD_HORIZONS = [1, 3, 5, 10]
+
+
+def wind_code(stock: str) -> str:
+    """补全交易所后缀: 002516→002516.SZ, 600519→600519.SH"""
+    suffix = "SH" if stock.startswith(("6", "9")) else "SZ"
+    return f"{stock}.{suffix}"
+
 
 # ─── L2 OHLC ───────────────────────────────────────────────────────
 
 
 def _l2_daily_ohlc(stock: str, date_str: str) -> dict | None:
-    cj_path = DATA_DIR / stock / "raw" / date_str / f"{stock}.SZ" / "逐笔成交.csv"
+    cj_path = DATA_DIR / stock / "raw" / date_str / wind_code(stock) / "逐笔成交.csv"
     if not cj_path.exists():
         return None
     for enc in ["gb18030", "gbk", "utf-8"]:
@@ -57,8 +71,10 @@ def _l2_daily_ohlc(stock: str, date_str: str) -> dict | None:
 
 def build_l2_ohlc_table(stock: str) -> pd.DataFrame:
     raw_dir = DATA_DIR / stock / "raw"
+    if not raw_dir.exists():
+        return pd.DataFrame()
     dates = sorted([d.name for d in raw_dir.iterdir()
-                    if d.is_dir() and len(d.name) == 8 and (d / f"{stock}.SZ").exists()])
+                    if d.is_dir() and len(d.name) == 8 and (d / wind_code(stock)).exists()])
     rows = []
     for d in dates:
         ohlc = _l2_daily_ohlc(stock, d)
@@ -68,7 +84,8 @@ def build_l2_ohlc_table(stock: str) -> pd.DataFrame:
 
 
 def attach_forward_returns(ops: pd.DataFrame,
-                           l2_ohlc: pd.DataFrame) -> pd.DataFrame:
+                           l2_ohlc: pd.DataFrame,
+                           stock: str = "") -> pd.DataFrame:
     """为每条 BUY 操作附加未来 L2 收益"""
     l2 = l2_ohlc.set_index("date")
     for h in FWD_HORIZONS:
@@ -76,7 +93,9 @@ def attach_forward_returns(ops: pd.DataFrame,
     ops["win_5d"] = np.nan
 
     buy_mask = ops["direction"] == "BUY"
-    buy_dates = ops.loc[buy_mask, "date"].values
+    stock_mask = ops["stock_code"] == stock if stock else pd.Series(True, index=ops.index)
+    mask = buy_mask & stock_mask
+    buy_dates = ops.loc[mask, "date"].values
     all_dates = sorted(l2.index)
 
     for i, d in enumerate(buy_dates):
@@ -89,9 +108,9 @@ def attach_forward_returns(ops: pd.DataFrame,
             if tidx < len(all_dates):
                 fwd_close = l2.loc[all_dates[tidx], "close"]
                 ret = (fwd_close / base_close - 1) * 100
-                ops.loc[(ops["date"] == d) & buy_mask, f"fwd_{h}d"] = ret
-        ret5 = ops.loc[(ops["date"] == d) & buy_mask, "fwd_5d"].values
-        ops.loc[(ops["date"] == d) & buy_mask, "win_5d"] = (ret5 > 0).astype(float)
+                ops.loc[(ops["date"] == d) & mask, f"fwd_{h}d"] = ret
+        ret5 = ops.loc[(ops["date"] == d) & mask, "fwd_5d"].values
+        ops.loc[(ops["date"] == d) & mask, "win_5d"] = (ret5 > 0).astype(float)
 
     return ops
 
@@ -128,8 +147,16 @@ def load_v4(stock: str) -> pd.DataFrame:
         print(f"  ⚠ v4 registry not found: {path}")
         return pd.DataFrame()
 
-    with open(path) as f:
-        data = json.load(f)
+    with open(path, "rb") as f:
+        raw = f.read()
+    for enc in ["utf-8", "gb18030", "gbk"]:
+        try:
+            data = json.loads(raw.decode(enc))
+            break
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+    else:
+        raise ValueError(f"Cannot decode {path}")
 
     rows = []
     for inst in data:
@@ -161,8 +188,16 @@ def load_v6(stock: str) -> pd.DataFrame:
         print(f"  ⚠ v6 registry not found: {path}")
         return pd.DataFrame()
 
-    with open(path) as f:
-        data = json.load(f)
+    with open(path, "rb") as f:
+        raw = f.read()
+    for enc in ["utf-8", "gb18030", "gbk"]:
+        try:
+            data = json.loads(raw.decode(enc))
+            break
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+    else:
+        raise ValueError(f"Cannot decode {path}")
 
     rows = []
     for inst in data:
@@ -186,16 +221,6 @@ def load_v6(stock: str) -> pd.DataFrame:
             })
     print(f"  v6: {len(data)} 个机构, {len(rows)} 条操作")
     return pd.DataFrame(rows)
-
-
-def load_v5(stock: str) -> pd.DataFrame:
-    """预留: v5 暂不评估"""
-    path = DATA_DIR / stock / "sofia_v5" / "institution_registry.json"
-    if not path.exists():
-        print(f"  v5: registry not found, skipping")
-        return pd.DataFrame()
-    print(f"  v5: found but not yet implemented, skipping")
-    return pd.DataFrame()
 
 
 # ─── Evaluation ─────────────────────────────────────────────────────
@@ -233,8 +258,10 @@ def eval_anon_level(ops: pd.DataFrame) -> pd.DataFrame:
             "confidence": conf,
             "behavior_type": g["behavior_type"].iloc[0],
             "active_days": g["date"].nunique(),
-            "buy_days": n_buy,
-            "sell_days": n_sell,
+            "buy_days": buys["date"].nunique(),
+            "sell_days": sells["date"].nunique(),
+            "buy_ops": n_buy,
+            "sell_ops": n_sell,
             "buy_ratio": round(buy_ratio, 3),
             "total_buy_wan": round(total_buy, 1),
             "total_sell_wan": round(total_sell, 1),
@@ -257,10 +284,9 @@ def eval_version_level(anon_eval: pd.DataFrame) -> pd.DataFrame:
         def _safe_mean(s):
             return round(float(s.mean()), 2) if len(s) > 0 else None
 
-        # Top 10 by net_buy_wan
         top10 = g.nlargest(10, "net_buy_wan")
 
-        rows.append({
+        row = {
             "version": ver,
             "n_anon": len(g),
             "n_high": len(high),
@@ -271,103 +297,188 @@ def eval_version_level(anon_eval: pd.DataFrame) -> pd.DataFrame:
             "median_active_days": round(float(g["active_days"].median()), 1),
             "avg_buy_ratio": _safe_mean(g["buy_ratio"]),
             "avg_net_buy_wan": _safe_mean(g["net_buy_wan"]),
-            "avg_fwd_5d": _safe_mean(g["avg_fwd_5d"].dropna()),
             "win_5d": _safe_mean(g["win_5d"].dropna()),
-            "top10_avg_fwd_5d": _safe_mean(top10["avg_fwd_5d"].dropna()),
-            "top10_win_5d": _safe_mean(top10["win_5d"].dropna()),
-            # Fragmentation: share of ops from LOW-confidence institutions
             "fragmentation_score": round(
                 low["signal_count"].sum() / max(1, g["signal_count"].sum()), 3),
-        })
+        }
+        for h in FWD_HORIZONS:
+            col = f"avg_fwd_{h}d"
+            row[col] = _safe_mean(g[col].dropna()) if col in g.columns else None
+            row[f"top10_{col}"] = _safe_mean(top10[col].dropna()) if col in top10.columns else None
+        rows.append(row)
     return pd.DataFrame(rows)
+
+
+# ─── Per-stock pipeline ────────────────────────────────────────────
+
+
+def evaluate_stock(stock: str, versions: list[str], out_dir: Path):
+    """对单只股票跑完整评估管线，输出到 out_dir"""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 1: L2 OHLC
+    print(f"  Step 1: 构建 L2 OHLC 基准价格表...")
+    l2_ohlc = build_l2_ohlc_table(stock)
+    if l2_ohlc.empty:
+        print(f"  ✗ 无 L2 数据，跳过 {stock}")
+        return None
+    l2_path = out_dir / "l2_daily_ohlc.csv"
+    l2_ohlc.to_csv(l2_path, index=False)
+    print(f"    → {l2_path} ({len(l2_ohlc)} 天)")
+
+    # Step 2: 加载版本
+    print(f"  Step 2: 加载机构注册表...")
+    loaders = {"v4": load_v4, "v6": load_v6}
+    dfs = []
+    for ver in versions:
+        if ver in loaders:
+            df = loaders[ver](stock)
+            if not df.empty:
+                dfs.append(df)
+
+    if not dfs:
+        print(f"  ✗ 没有找到任何版本的机构数据")
+        return None
+
+    ops = pd.concat(dfs, ignore_index=True)
+    ops["date"] = ops["date"].astype(str)
+
+    # Step 3: 附加前向收益
+    print(f"  Step 3: 附加 L2 口径未来收益...")
+    ops = attach_forward_returns(ops, l2_ohlc, stock)
+
+    # Step 4: 输出统一操作表
+    print(f"  Step 4: 输出统一操作表...")
+    unified_path = out_dir / "crossday_operations_unified.csv"
+    ops.to_csv(unified_path, index=False)
+    print(f"    → {unified_path} ({len(ops)} 条)")
+
+    for ver in ops["version"].unique():
+        vops = ops[ops["version"] == ver]
+        buys = vops[vops["direction"] == "BUY"]
+        print(f"    {ver}: {len(vops)} ops, BUY={len(buys)}, "
+              f"fwd_5d均值={buys['fwd_5d'].dropna().mean():.2f}%, "
+              f"win_5d={buys['win_5d'].dropna().mean():.3f}")
+
+    # Step 5: 机构级评估
+    print(f"  Step 5: 匿名机构级评估...")
+    anon_eval = eval_anon_level(ops)
+    anon_eval = anon_eval.sort_values(["version", "net_buy_wan"], ascending=[True, False])
+    anon_path = out_dir / "crossday_anon_eval.csv"
+    anon_eval.to_csv(anon_path, index=False)
+    print(f"    → {anon_path} ({len(anon_eval)} 个机构)")
+
+    # Step 6: 版本级评估
+    print(f"  Step 6: 版本级评估...")
+    ver_eval = eval_version_level(anon_eval)
+    ver_path = out_dir / "crossday_version_eval.csv"
+    ver_eval.to_csv(ver_path, index=False)
+    print(f"    → {ver_path}")
+
+    # 打印版本对比
+    print(f"\n  {'─' * 60}")
+    print_cols = ["version", "n_anon", "n_high", "n_medium", "n_low",
+                  "avg_buy_ratio", "avg_net_buy_wan", "avg_fwd_5d", "win_5d",
+                  "top10_avg_fwd_5d", "top10_win_5d", "fragmentation_score"]
+    available_print = [c for c in print_cols if c in ver_eval.columns]
+    print(f"  {ver_eval[available_print].to_string(index=False)}")
+
+    # Top 机构
+    top_cols = ["version", "anon_id", "confidence", "behavior_type",
+                "active_days", "buy_ratio", "net_buy_wan", "avg_fwd_5d", "win_5d"]
+    print(f"\n  Top 5 机构 (按净买入额):")
+    print(f"  {anon_eval.head(5)[top_cols].to_string(index=False)}")
+
+    return {"anon_eval": anon_eval, "ver_eval": ver_eval}
+
+
+# ─── OOT Summary ───────────────────────────────────────────────────
+
+
+def build_oot_summary(ver_eval_list: list[pd.DataFrame]) -> pd.DataFrame:
+    """从各股票版本级评估拼接 OOT 汇总表"""
+    if not ver_eval_list:
+        return pd.DataFrame()
+
+    df = pd.concat(ver_eval_list, ignore_index=True)
+
+    summary_cols = [
+        "stock_code", "version",
+        "n_anon", "n_high", "n_medium", "n_low", "low_ratio",
+        "avg_active_days", "avg_buy_ratio", "avg_net_buy_wan",
+        "avg_fwd_1d", "avg_fwd_3d", "avg_fwd_5d", "avg_fwd_10d",
+        "win_5d", "top10_avg_fwd_5d", "top10_win_5d",
+        "fragmentation_score",
+    ]
+
+    available = [c for c in summary_cols if c in df.columns]
+    return df[available]
 
 
 # ─── Main ───────────────────────────────────────────────────────────
 
 
 def main():
-    stocks = [d.name for d in DATA_DIR.iterdir()
-              if d.is_dir() and (d / "raw").exists()]
+    ap = argparse.ArgumentParser(description="跨日匿名机构版本评估 (OOT)")
+    ap.add_argument("--stocks", default="",
+                    help="股票代码逗号分隔, 如 '301529,300100'。默认自动发现全部")
+    ap.add_argument("--versions", default="v4,v6",
+                    help="评估版本, 逗号分隔 (默认 v4,v6)")
+    args = ap.parse_args()
+
+    # 确定股票列表
+    if args.stocks and args.stocks.lower() != "all":
+        stocks = [s.strip() for s in args.stocks.split(",") if s.strip()]
+    else:
+        stocks = sorted([d.name for d in DATA_DIR.iterdir()
+                        if d.is_dir() and (d / "raw").exists()])
 
     if not stocks:
-        print("未找到股票数据")
+        print("未找到股票数据。用 --stocks 指定或确保 data/single_stock/<code>/raw/ 存在")
         sys.exit(1)
 
-    # 只处理有 L2 数据的股票
-    stock = stocks[0]  # 当前只有 002516
-    print(f"评估股票: {stock}\n")
+    versions = [v.strip() for v in args.versions.split(",")]
 
-    # ─── Step 1: L2 OHLC ───
-    print("Step 1: 构建 L2 OHLC 基准价格表...")
-    l2_ohlc = build_l2_ohlc_table(stock)
-    l2_path = OUT_DIR / "l2_daily_ohlc.csv"
-    l2_ohlc.to_csv(l2_path, index=False)
-    print(f"  → {l2_path} ({len(l2_ohlc)} 天)")
+    print(f"评估股票: {stocks}")
+    print(f"版本: {versions}")
+    print(f"输出: {OOT_DIR}\n")
 
-    # ─── Step 2: 加载各版本 ───
-    print("\nStep 2: 加载各版本机构注册表...")
-    dfs = []
-    for loader, label in [(load_v4, "v4"), (load_v6, "v6"), (load_v5, "v5")]:
-        df = loader(stock)
-        if not df.empty:
-            dfs.append(df)
+    OOT_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not dfs:
-        print("没有找到任何版本的机构数据")
-        sys.exit(1)
+    all_ver_evals = []
 
-    ops = pd.concat(dfs, ignore_index=True)
-    ops["date"] = ops["date"].astype(str)
+    for stock in stocks:
+        print(f"{'=' * 60}")
+        print(f"股票: {stock}")
+        print(f"{'=' * 60}")
 
-    # ─── Step 3: 附加前向收益 ───
-    print("\nStep 3: 附加 L2 口径未来收益...")
-    ops = attach_forward_returns(ops, l2_ohlc)
+        stock_out = OOT_DIR / stock
+        result = evaluate_stock(stock, versions, stock_out)
 
-    # ─── Step 4: 输出统一操作表 ───
-    print("\nStep 4: 输出统一操作表...")
-    unified_path = OUT_DIR / "crossday_operations_unified.csv"
-    ops.to_csv(unified_path, index=False)
-    print(f"  → {unified_path} ({len(ops)} 条)")
+        if result and "ver_eval" in result:
+            ve = result["ver_eval"].copy()
+            ve["stock_code"] = stock
+            all_ver_evals.append(ve)
+        print()
 
-    # 快速检查
-    for ver in ops["version"].unique():
-        vops = ops[ops["version"] == ver]
-        buys = vops[vops["direction"] == "BUY"]
-        print(f"  {ver}: {len(vops)} ops, BUY={len(buys)}, "
-              f"fwd_5d均值={buys['fwd_5d'].dropna().mean():.2f}%, "
-              f"win_5d={buys['win_5d'].dropna().mean():.3f}")
+    # ─── 汇总 ───
+    if all_ver_evals:
+        summary = build_oot_summary(all_ver_evals)
 
-    # ─── Step 5: 机构级评估 ───
-    print("\nStep 5: 匿名机构级评估...")
-    anon_eval = eval_anon_level(ops)
-    anon_eval = anon_eval.sort_values(["version", "net_buy_wan"], ascending=[True, False])
-    anon_path = OUT_DIR / "crossday_anon_eval.csv"
-    anon_eval.to_csv(anon_path, index=False)
-    print(f"  → {anon_path} ({len(anon_eval)} 个机构)")
+        # v6-only summary (the OOT validation)
+        v6_summary = summary[summary["version"] == "v6"].drop(columns=["version"], errors="ignore")
+        summary_path = OOT_DIR / "v6_oot_summary.csv"
+        v6_summary.to_csv(summary_path, index=False)
+        print(f"\nOOT 汇总: {summary_path}")
+        print(f"{'=' * 80}")
+        print(v6_summary.to_string(index=False))
 
-    # ─── Step 6: 版本级评估 ───
-    print("\nStep 6: 版本级评估...")
-    ver_eval = eval_version_level(anon_eval)
-    ver_path = OUT_DIR / "crossday_version_eval.csv"
-    ver_eval.to_csv(ver_path, index=False)
-    print(f"  → {ver_path}")
-
-    # ─── 打印版本对比 ───
-    print("\n" + "=" * 80)
-    print("版本对比摘要")
-    print("=" * 80)
-    cols = ["version", "n_anon", "n_high", "n_medium", "n_low",
-            "avg_buy_ratio", "avg_net_buy_wan", "avg_fwd_5d", "win_5d",
-            "top10_avg_fwd_5d", "top10_win_5d", "fragmentation_score"]
-    print(ver_eval[cols].to_string(index=False))
-
-    # 打印 Top 机构
-    print("\n" + "=" * 80)
-    print("Top 10 机构 (按净买入额)")
-    print("=" * 80)
-    top_cols = ["version", "anon_id", "confidence", "behavior_type",
-                "active_days", "buy_ratio", "net_buy_wan", "avg_fwd_5d", "win_5d"]
-    print(anon_eval.head(10)[top_cols].to_string(index=False))
+        # Also save full summary (v4+v6)
+        full_path = OOT_DIR / "oot_summary_full.csv"
+        summary.to_csv(full_path, index=False)
+        print(f"\n完整汇总: {full_path}")
+    else:
+        print("没有成功评估任何股票")
 
 
 if __name__ == "__main__":

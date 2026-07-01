@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import json
 import sys
+import argparse
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -92,14 +93,34 @@ SESSION_ORDER = {"AUCTION": 0, "OPEN": 1, "MORNING": 2, "LATE_MORNING": 3,
                  "EARLY_AFTER": 4, "AFTERNOON": 5, "CLOSE": 6}
 
 
+def configure_stock(stock: str) -> None:
+    """Point all v6 outputs at the requested single-stock workspace."""
+    global STOCK, STOCK_DIR, V4_DIR, V6_DIR
+    STOCK = stock
+    STOCK_DIR = PROJECT / "data" / "single_stock" / STOCK
+    V4_DIR = STOCK_DIR / "sofia_v4"
+    V6_DIR = STOCK_DIR / "sofia_v6"
+    V6_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_json_compat(path: Path):
+    for encoding in ("utf-8", "utf-8-sig", "gb18030", "gbk"):
+        try:
+            with open(path, encoding=encoding) as f:
+                return json.load(f)
+        except UnicodeDecodeError:
+            continue
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return json.load(f)
+
+
 # ═══════════════════════════════════════════════════
 # 1. 加载v4数据
 # ═══════════════════════════════════════════════════
 
 def load_v4_institutions():
     """加载v4注册表，提取机构的完整簇列表和指纹。"""
-    with open(V4_DIR / "institution_registry.json") as f:
-        registry = json.load(f)
+    registry = load_json_compat(V4_DIR / "institution_registry.json")
 
     institutions = []
     for inst in registry:
@@ -800,7 +821,7 @@ def generate_report(institutions: list[dict], merge_log: list[dict]) -> Path:
         lines.append(f"| {sess} | {buyers_str} | {sellers_str} |")
 
     report_path = V6_DIR / "v6_report.md"
-    report_path.write_text("\n".join(lines))
+    report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
 
 
@@ -809,7 +830,13 @@ def generate_report(institutions: list[dict], merge_log: list[dict]) -> Path:
 # ═══════════════════════════════════════════════════
 
 def main():
+    parser = argparse.ArgumentParser(description="SOFIA v6 enhanced — v4 institution merge/profile layer")
+    parser.add_argument("--stock", default=STOCK, help="股票代码, 例如 002516/301529/300100")
+    args = parser.parse_args()
+    configure_stock(args.stock)
+
     print("SOFIA v6 — v4骨架 + v5增强")
+    print(f"股票: {STOCK}")
     print()
 
     # 加载v4机构
@@ -870,7 +897,7 @@ def main():
                  if k not in ("operations", "v4_behavior", "v4_fingerprint_summary")}
         entry["operations"] = inst["operations"]
         registry_out.append(entry)
-    with open(V6_DIR / "institution_registry.json", "w") as f:
+    with open(V6_DIR / "institution_registry.json", "w", encoding="utf-8") as f:
         json.dump(registry_out, f, ensure_ascii=False, indent=2)
 
     # 汇总CSV

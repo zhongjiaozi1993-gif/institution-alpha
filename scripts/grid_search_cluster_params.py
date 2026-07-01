@@ -35,16 +35,6 @@ KNOWN_EVENT_DATES = {
 }
 
 
-def load_price_map(stock: str) -> dict[str, float]:
-    """加载 price_daily.csv → {date: hfq_close}"""
-    p = DATA_DIR / stock / "price_daily.csv"
-    if not p.exists():
-        return {}
-    df = pd.read_csv(p)
-    df = df.rename(columns={"日期": "date", "收盘": "close"})
-    df["date"] = df["date"].astype(str).str.replace("-", "")
-    return dict(zip(df["date"], df["close"].astype(float)))
-
 
 def preload_wtcj_cache(stock: str, dates: list[str]) -> dict[str, pd.DataFrame]:
     """预加载所有日期的委托-成交匹配数据，返回 {date_str: wtcj_df}"""
