@@ -1,2 +1,2 @@
 stock_code,version,n_anon,n_high,n_medium,n_low,low_ratio,avg_active_days,avg_buy_ratio,avg_net_buy_wan,avg_fwd_1d,avg_fwd_3d,avg_fwd_5d,avg_fwd_10d,win_5d,top10_avg_fwd_5d,fragmentation_score
-002516,v6,15,6,9,0,0.0,29.13,0.57,9122.4,0.25,2.9,3.76,3.48,0.75,3.83,0.0
+000630,v6,25,6,18,1,0.04,17.48,0.53,1981.68,-0.03,-0.51,-0.76,-1.28,0.6,-0.06,0.003
