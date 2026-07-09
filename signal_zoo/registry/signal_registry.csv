@@ -15,7 +15,7 @@ Signal013,PE_Basic,Fundamental,Self,Daily,Research,未验证,市盈率基础
 Signal014,PB_Basic,Fundamental,Self,Daily,Research,未验证,市净率基础
 Signal015,ROE_Basic,Fundamental,Self,Daily,Research,未验证,ROE基础
 Signal016,Sector_Momentum,Price,Self,Daily,Research,未验证,行业动量
-Signal017,Alpha191_K_UP_FRAC,Price,Alpha191,Daily,Research,未验证,Alpha191 #16: 日内收益率偏度
-Signal018,Alpha191_TURN_STD,Price,Alpha191,Daily,Research,未验证,Alpha191 #56: 换手率波动
-Signal019,Alpha191_VOL_CORR,Price,Alpha191,Daily,Research,未验证,Alpha191 #85: 量价相关性
-Signal020,Alpha191_HL_SPREAD,Price,Alpha191,Daily,Research,未验证,Alpha191 #127: 高低价差动量
+Signal017,Alpha191_Reversal_GTJA002,Price,External (aurumq-rl),Daily,Research,已验证,GTJA #002: Williams %R reversal; RankIC_5d=-0.022 无效; missing=0.7%
+Signal018,Alpha191_VolumePrice_GTJA004,Price,External (aurumq-rl),Daily,Research,已验证,GTJA #004: Trend regime + volume gate; RankIC_20d=+0.053 有研究价值; 离散输出{-1,0,1}需改进; missing=8.2%
+Signal019,Alpha191_Volatility_GTJA070,Price,External (aurumq-rl),Daily,Research,已验证,GTJA #070: 6d amount std; RankIC_5d=-0.064 强负向(低波动>高波动); 可反用; missing=2.1%
+Signal020,Alpha191_Momentum_GTJA085,Price,External (aurumq-rl),Daily,Research,已验证,GTJA #085: TS-rank volume ratio x price delta; RankIC_3d=+0.047 全正; 20d spread=+0.58%; 4个中最优; missing=15.6%
