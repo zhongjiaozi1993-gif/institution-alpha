@@ -1,21 +1,47 @@
-signal_id,signal_name,category,source,data_requirement,status,validation_status,notes
-Signal001,Price_Momentum_20d,Price,Self,Daily,Research,未验证,20日价格动量基线
-Signal002,Volume_MA_Divergence,Price,Self,Daily,Research,未验证,成交量均线偏离
-Signal003,Volatility_Breakout,Price,Self,Daily,Research,未验证,波动率突破
-Signal004,DBSCAN_BUY,Microstructure,Self,Level2,Candidate,已验证,基于L2逐笔DBSCAN聚类的大单买入信号;Top100中13只有效候选;win5d=59.5%
-Signal005,Cluster_Density,Microstructure,Self,Level2,Research,未验证,同一时段聚类密度
-Signal006,VWAP_Pressure,Microstructure,Self,Level2,Research,未验证,VWAP偏离方向与强度
-Signal007,OFI_Basic,Order_Flow,Self,Level2,Research,未验证,订单流不平衡基础版
-Signal008,Queue_Imbalance,Order_Flow,Self,Level2,Research,未验证,买卖队列不平衡
-Signal009,Cancel_Ratio,Order_Flow,Self,Level2,Research,未验证,撤单率异常
-Signal010,Aggressive_Buy_Ratio,Order_Flow,Self,Level2,Research,未验证,激进买入占比
-Signal011,Sweep_Detector,Order_Flow,Self,Level2,Research,未验证,扫单检测
-Signal012,Iceberg_Detector,Order_Flow,Self,Level2,Research,未验证,冰山订单检测
-Signal013,PE_Basic,Fundamental,Self,Daily,Research,未验证,市盈率基础
-Signal014,PB_Basic,Fundamental,Self,Daily,Research,未验证,市净率基础
-Signal015,ROE_Basic,Fundamental,Self,Daily,Research,未验证,ROE基础
-Signal016,Sector_Momentum,Price,Self,Daily,Research,未验证,行业动量
-Signal017,Alpha191_Reversal_GTJA002,Price,External (aurumq-rl),Daily,Research,已验证,GTJA #002: Williams %R reversal; RankIC_5d=-0.022 无效; missing=0.7%
-Signal018,Alpha191_VolumePrice_GTJA004,Price,External (aurumq-rl),Daily,Research,已验证,GTJA #004: Trend regime + volume gate; RankIC_20d=+0.053 有研究价值; 离散输出{-1,0,1}需改进; missing=8.2%
-Signal019,Alpha191_Volatility_GTJA070,Price,External (aurumq-rl),Daily,Research,已验证,GTJA #070: 6d amount std; RankIC_5d=-0.064 强负向(低波动>高波动); 可反用; missing=2.1%
-Signal020,Alpha191_Momentum_GTJA085,Price,External (aurumq-rl),Daily,Research,已验证,GTJA #085: TS-rank volume ratio x price delta; RankIC_3d=+0.047 全正; 20d spread=+0.58%; 4个中最优; missing=15.6%
+signal_id,signal_name,category,source,source_library,source_formula_id,data_requirement,frequency,status,validation_status,recommended_direction,notes
+Signal001,Price_Momentum_20d,Price,Self,,,Daily,Daily,Research,未验证,original,20日价格动量基线
+Signal002,Volume_MA_Divergence,Price,Self,,,Daily,Daily,Research,未验证,unclear,成交量均线偏离
+Signal003,Volatility_Breakout,Price,Self,,,Daily,Daily,Research,未验证,unclear,波动率突破
+Signal004,DBSCAN_BUY,Microstructure,Self,,,Level2,Daily,Candidate,已验证,original,L2 DBSCAN聚类大单买入;Top100中13只有效候选;win5d=59.5%
+Signal005,Cluster_Density,Microstructure,Self,,,Level2,Daily,Research,未验证,unclear,同一时段聚类密度
+Signal006,VWAP_Pressure,Microstructure,Self,,,Level2,Daily,Research,未验证,unclear,VWAP偏离方向与强度
+Signal007,OFI_Basic,Order_Flow,Self,,,Level2,Daily,Research,未验证,unclear,订单流不平衡基础版
+Signal008,Queue_Imbalance,Order_Flow,Self,,,Level2,Daily,Research,未验证,unclear,买卖队列不平衡
+Signal009,Cancel_Ratio,Order_Flow,Self,,,Level2,Daily,Research,未验证,unclear,撤单率异常
+Signal010,Aggressive_Buy_Ratio,Order_Flow,Self,,,Level2,Daily,Research,未验证,unclear,激进买入占比
+Signal011,Sweep_Detector,Order_Flow,Self,,,Level2,Daily,Research,未验证,unclear,扫单检测
+Signal012,Iceberg_Detector,Order_Flow,Self,,,Level2,Daily,Research,未验证,unclear,冰山订单检测
+Signal013,PE_Basic,Fundamental,Self,,,Daily,Daily,Research,未验证,unclear,市盈率基础
+Signal014,PB_Basic,Fundamental,Self,,,Daily,Daily,Research,未验证,unclear,市净率基础
+Signal015,ROE_Basic,Fundamental,Self,,,Daily,Daily,Research,未验证,unclear,ROE基础
+Signal016,Sector_Momentum,Price,Self,,,Daily,Daily,Research,未验证,unclear,行业动量
+Signal017,Alpha191_Reversal_GTJA002,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_002,Daily OHLCV,Daily,Research,已验证,original,Reversal; IC=0.0111 ICIR=0.08 dir=original miss=0.6%
+Signal018,Alpha191_VolumePrice_GTJA004,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_004,Daily OHLCV,Daily,Research,已验证,unclear,Price; IC=0.0097 ICIR=0.10 dir=unclear miss=2.9%
+Signal019,Alpha191_Volatility_GTJA070,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_070,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Volatility; IC=-0.1102 ICIR=-0.69 dir=inverse miss=2.1%
+Signal020,Alpha191_Momentum_GTJA085,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_085,Daily OHLCV,Daily,Candidate,已验证,original,Momentum; IC=0.0348 ICIR=0.30 dir=original miss=15.6%
+Signal021,Alpha191_Momentum_GTJA014,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_014,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Momentum; IC=-0.0530 ICIR=-0.42 dir=inverse miss=2.1%
+Signal022,Alpha191_Momentum_GTJA053,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_053,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Momentum; IC=-0.0394 ICIR=-0.37 dir=inverse miss=4.5%
+Signal023,Alpha191_Momentum_GTJA088,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_088,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Momentum; IC=-0.0845 ICIR=-0.59 dir=inverse miss=8.2%
+Signal024,Alpha191_Momentum_GTJA106,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_106,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Momentum; IC=-0.0674 ICIR=-0.54 dir=inverse miss=8.2%
+Signal025,Alpha191_Momentum_GTJA112,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_112,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Momentum; IC=-0.0543 ICIR=-0.41 dir=inverse miss=4.9%
+Signal026,Alpha191_Momentum_GTJA167,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_167,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Momentum; IC=-0.0725 ICIR=-0.55 dir=inverse miss=4.9%
+Signal027,Alpha191_Reversal_GTJA046,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_046,Daily OHLCV,Daily,Candidate,已验证,original,Reversal; IC=0.0778 ICIR=0.52 dir=original miss=9.5%
+Signal028,Alpha191_Reversal_GTJA065,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_065,Daily OHLCV,Daily,Candidate,已验证,original,Reversal; IC=0.0654 ICIR=0.45 dir=original miss=2.1%
+Signal029,Alpha191_Reversal_GTJA066,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_066,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Reversal; IC=-0.0654 ICIR=-0.45 dir=inverse miss=2.1%
+Signal030,Alpha191_Reversal_GTJA078,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_078,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Reversal; IC=-0.0602 ICIR=-0.45 dir=inverse miss=9.1%
+Signal031,Alpha191_VolPrice_GTJA011,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_011,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Volume-Price; IC=-0.0391 ICIR=-0.32 dir=inverse miss=2.6%
+Signal032,Alpha191_VolPrice_GTJA032,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_032,Daily OHLCV,Daily,Research,已验证,original,Volume-Price; IC=0.0137 ICIR=0.12 dir=original miss=67.3%
+Signal033,Alpha191_VolPrice_GTJA084,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_084,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Volume-Price; IC=-0.0696 ICIR=-0.58 dir=inverse miss=7.8%
+Signal034,Alpha191_VolPrice_GTJA102,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_102,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Volume-Price; IC=-0.0606 ICIR=-0.53 dir=inverse miss=4.1%
+Signal035,Alpha191_VolPrice_GTJA128,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_128,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Volume-Price; IC=-0.0505 ICIR=-0.40 dir=inverse miss=5.4%
+Signal036,Alpha191_VolPrice_GTJA150,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_150,Daily OHLCV,Daily,Research,已验证,inverse,Volume-Price; IC=-0.0263 ICIR=-0.19 dir=inverse miss=0.0%
+Signal037,Alpha191_VolPrice_GTJA178,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_178,Daily OHLCV,Daily,Research,已验证,inverse,Volume-Price; IC=-0.0240 ICIR=-0.17 dir=inverse miss=0.4%
+Signal038,Alpha191_Volatility_GTJA049,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_049,Daily OHLCV,Daily,Candidate,已验证,original,Volatility; IC=0.0543 ICIR=0.48 dir=original miss=4.5%
+Signal039,Alpha191_Volatility_GTJA076,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_076,Daily OHLCV,Daily,Research,已验证,unclear,Volatility; IC=-0.0080 ICIR=-0.08 dir=unclear miss=8.2%
+Signal040,Alpha191_Volatility_GTJA095,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_095,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Volatility; IC=-0.1005 ICIR=-0.61 dir=inverse miss=7.8%
+Signal041,Alpha191_Volatility_GTJA158,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_158,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Volatility; IC=-0.0759 ICIR=-0.49 dir=inverse miss=0.0%
+Signal042,Alpha191_Volatility_GTJA161,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_161,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Volatility; IC=-0.0549 ICIR=-0.42 dir=inverse miss=4.5%
+Signal043,Alpha191_Trend_GTJA089,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_089,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Trend; IC=-0.0370 ICIR=-0.31 dir=inverse miss=14.4%
+Signal044,Alpha191_Trend_GTJA096,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_096,Daily OHLCV,Daily,InverseCandidate,已验证,inverse,Trend; IC=-0.0334 ICIR=-0.24 dir=inverse miss=4.9%
+Signal045,Alpha191_Trend_GTJA153,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_153,Daily OHLCV,Daily,Research,已验证,inverse,Trend; IC=-0.0111 ICIR=-0.08 dir=inverse miss=9.5%
+Signal046,Alpha191_Trend_GTJA172,Price,External (aurumq-rl),aurumq-rl/GTJA191,gtja_172,Daily OHLCV,Daily,Research,已验证,inverse,Trend; IC=-0.0194 ICIR=-0.19 dir=inverse miss=7.4%
