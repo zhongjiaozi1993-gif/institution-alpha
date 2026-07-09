@@ -315,7 +315,7 @@ def main():
         print(f"Loading cached fwd returns: {fwd_cache}")
         fwd_df = pd.read_parquet(fwd_cache)
     else:
-        print("Precomputing forward returns for 292 stocks...")
+        print(f"Precomputing forward returns for {len(stock_codes)} stocks...")
         fwd_df = precompute_forward_returns(stocks, args.start_date, args.end_date)
         fwd_df.to_parquet(fwd_cache, index=False)
         print(f"  Cached: {fwd_cache} ({len(fwd_df)} rows)")

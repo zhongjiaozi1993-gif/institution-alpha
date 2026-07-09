@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 PROJECT = Path(__file__).resolve().parent.parent.parent.parent
-SIGNAL_DIR = PROJECT / "data" / "processed" / "signals" / "price_alpha191_300"
+SIGNAL_DIR = PROJECT / "data" / "processed" / "signals" / "price_alpha191_full"
 SIGNAL_DIR.mkdir(parents=True, exist_ok=True)
 
 from .adapter import compute_signal_batch, FACTOR_REGISTRY
@@ -74,10 +74,22 @@ def generate_all_signals(
 
 
 def load_validation_300_stocks() -> list[str]:
-    """Load 300-stock validation universe (only stocks with daily data)."""
+    """Load 300-stock validation universe (only stocks with daily data). Legacy."""
     val_file = PROJECT / "data" / "processed" / "stock_universe" / "validation_300.txt"
     stocks = []
     with open(val_file) as f:
+        for line in f:
+            code, status = line.strip().split()
+            if status == "ok":
+                stocks.append(code.zfill(6))
+    return stocks
+
+
+def load_alpha191_daily_universe() -> list[str]:
+    """Load Alpha191 daily universe (Universe002): ZZ1000 + ZZ500 with daily data."""
+    uni_file = PROJECT / "data" / "processed" / "stock_universe" / "daily_alpha191_full.txt"
+    stocks = []
+    with open(uni_file) as f:
         for line in f:
             code, status = line.strip().split()
             if status == "ok":
@@ -98,8 +110,8 @@ def load_candidate_stocks() -> list[str]:
 
 
 def main():
-    stocks = load_validation_300_stocks()
-    print(f"Generating signals for {len(stocks)} validation stocks...")
+    stocks = load_alpha191_daily_universe()
+    print(f"Generating signals for {len(stocks)} Alpha191 daily universe stocks (Universe002)...")
     generate_all_signals(stocks)
     print("Done.")
 
