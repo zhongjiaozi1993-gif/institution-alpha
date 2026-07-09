@@ -1,0 +1,21 @@
+signal_id,signal_name,category,source,data_requirement,status,validation_status,notes
+Signal001,Price_Momentum_20d,Price,Self,Daily,Research,未验证,20日价格动量基线
+Signal002,Volume_MA_Divergence,Price,Self,Daily,Research,未验证,成交量均线偏离
+Signal003,Volatility_Breakout,Price,Self,Daily,Research,未验证,波动率突破
+Signal004,DBSCAN_BUY,Microstructure,Self,Level2,Candidate,已验证,基于L2逐笔DBSCAN聚类的大单买入信号;Top100中13只有效候选;win5d=59.5%
+Signal005,Cluster_Density,Microstructure,Self,Level2,Research,未验证,同一时段聚类密度
+Signal006,VWAP_Pressure,Microstructure,Self,Level2,Research,未验证,VWAP偏离方向与强度
+Signal007,OFI_Basic,Order_Flow,Self,Level2,Research,未验证,订单流不平衡基础版
+Signal008,Queue_Imbalance,Order_Flow,Self,Level2,Research,未验证,买卖队列不平衡
+Signal009,Cancel_Ratio,Order_Flow,Self,Level2,Research,未验证,撤单率异常
+Signal010,Aggressive_Buy_Ratio,Order_Flow,Self,Level2,Research,未验证,激进买入占比
+Signal011,Sweep_Detector,Order_Flow,Self,Level2,Research,未验证,扫单检测
+Signal012,Iceberg_Detector,Order_Flow,Self,Level2,Research,未验证,冰山订单检测
+Signal013,PE_Basic,Fundamental,Self,Daily,Research,未验证,市盈率基础
+Signal014,PB_Basic,Fundamental,Self,Daily,Research,未验证,市净率基础
+Signal015,ROE_Basic,Fundamental,Self,Daily,Research,未验证,ROE基础
+Signal016,Sector_Momentum,Price,Self,Daily,Research,未验证,行业动量
+Signal017,Alpha191_K_UP_FRAC,Price,Alpha191,Daily,Research,未验证,Alpha191 #16: 日内收益率偏度
+Signal018,Alpha191_TURN_STD,Price,Alpha191,Daily,Research,未验证,Alpha191 #56: 换手率波动
+Signal019,Alpha191_VOL_CORR,Price,Alpha191,Daily,Research,未验证,Alpha191 #85: 量价相关性
+Signal020,Alpha191_HL_SPREAD,Price,Alpha191,Daily,Research,未验证,Alpha191 #127: 高低价差动量
