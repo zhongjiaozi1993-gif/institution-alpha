@@ -1,3 +1,4 @@
 universe_id,universe_name,data_requirement,source,stock_count,start_date,end_date,status,notes
-Universe001,level2_processed_292,Level2,selected_stocks.csv (DBSCAN pipeline output),292,2025-01-01,2025-12-31,Active,DBSCAN Level2 signals only; 8 stocks missing daily data; DO NOT use for Price/Fundamental signals
-Universe002,daily_alpha191_full,Daily OHLCV,ZZ1000 liquid selected (736) + ZZ500 daily-available (46),782,2025-01-01,2025-12-31,Active,Alpha191 daily price-volume signals; ZZ1000 coverage 100%; ZZ500 limited to 46 stocks with available daily data
+Universe_A,fast_debug_pool,Daily OHLCV,Universe_B 确定性 300 子集,300,2025-01-01,2025-12-31,Active,快速开发/调试池
+Universe_B,small_cap_main_research,Daily OHLCV,ZZ1000 流动性成分 + 通用过滤,731,2025-01-01,2025-12-31,Active,小盘主研究池；ST 剔除因缺数据源未执行
+Universe_C,level2_available_research,Level-2 + Daily,data/single_stock 有逐笔衍生数据且日线完整,175,2025-01-01,2025-12-31,Active,Level-2 研究池；160 只有 Alpha191 信号

@@ -1,0 +1,34 @@
+# Universe 定义（本轮重构，表意命名 A/B/C）
+# 所有阈值集中在此，构建逻辑见 src/registry/universe_registry.py
+# 数据窗口：2025 全年（全库仅此一年）
+
+period:
+  start_date: "2025-01-01"
+  end_date: "2025-12-31"
+
+# 通用过滤阈值
+filters:
+  min_trading_days: 200        # <200/243 视为数据缺失严重，剔除
+  new_ipo_days: 60             # 有效交易日 <60 视为新股，剔除
+  min_median_amount: 10000000  # 近似流动性：日成交额中位数 <1000万元，剔除
+  # exclude_st: true           # 无 ST 名单数据源，暂无法执行（见 project_audit §9）
+
+universes:
+  Universe_A:
+    name: fast_debug_pool
+    purpose: fast_debug
+    # 快速调试池：Universe_B 的确定性 300 只子集（按代码排序取前 300）
+    base: subset_of_B
+    size: 300
+
+  Universe_B:
+    name: small_cap_main_research
+    purpose: small_cap_main_research
+    # 主研究池：中证1000 流动性成分为基础，套用通用过滤
+    base_file: "data/processed/stock_universe/zz1000_liquid_selected.txt"
+
+  Universe_C:
+    name: level2_available_research
+    purpose: level2_available_research
+    # Level-2 研究池：有逐笔衍生数据(data/single_stock)且日线完整、可交易
+    base_dir: "data/single_stock"
