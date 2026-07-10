@@ -161,7 +161,8 @@ class SignalBacktester:
         not_buyable, not_sellable, suspended, not_tradable = self._build_flag_lookups(tradable_flags)
 
         sig = signals[["stock_code", "signal_date"]].drop_duplicates()
-        sig["stock_code"] = sig["stock_code"].astype(str)
+        # 引擎内部统一补零到 6 位，避免仅依赖入口脚本（int/"1" 均可匹配 prices/flags 的 6 位键）
+        sig["stock_code"] = sig["stock_code"].astype(str).str.zfill(6)
         sig_by_date: dict[str, list[str]] = defaultdict(list)
         for _, row in sig.iterrows():
             sig_by_date[row["signal_date"]].append(row["stock_code"])
@@ -210,7 +211,10 @@ class SignalBacktester:
             # ---- Step 1: exits (positions entered on prior days) ----
             for stock, pos in list(open_positions.items()):
                 if (stock, today) in suspended:
-                    continue  # 停牌: 当日不可交易，持仓顺延
+                    # 停牌当日不可交易；若已到期，登记 pending maturity（下一可卖日按开盘价成交，deferred）
+                    if pos.pending_exit_reason is None and day_idx >= date_to_idx.get(pos.exit_date, day_idx):
+                        pos.pending_exit_reason = "maturity"
+                    continue
                 sellable = (stock, today) not in not_sellable
 
                 # 先处理已挂起的退出（跌停/停牌顺延）
@@ -306,13 +310,29 @@ class SignalBacktester:
                 "n_positions": len(open_positions),
             })
 
+        # ---- end-of-period unrealized (positions never closed, e.g. stuck in pending_exit) ----
+        end_cost = sum(p.gross_alloc for p in open_positions.values())
+        end_value = sum(p.shares * p.last_close for p in open_positions.values())
+        final_nav = equity[-1]["nav"] if equity else cfg.initial_capital
+        unrealized = {
+            "open_positions_at_end": len(open_positions),
+            "unrealized_position_value": round(end_value, 6),
+            "unrealized_pnl_pct": round((end_value / end_cost - 1) * 100, 4) if end_cost else 0.0,
+            "unrealized_nav_contribution": round(end_value / final_nav, 4) if final_nav else 0.0,
+        }
+
         trades_df = pd.DataFrame(trades)
         equity_df = pd.DataFrame(equity)
-        summary_df = self._build_summary(trades_df, equity_df)
+        summary_df = self._build_summary(trades_df, equity_df, unrealized)
         return {"trades": trades_df, "equity_curve": equity_df, "summary": summary_df}
 
-    def _build_summary(self, trades_df: pd.DataFrame, equity_df: pd.DataFrame) -> pd.DataFrame:
+    def _build_summary(self, trades_df: pd.DataFrame, equity_df: pd.DataFrame,
+                       unrealized: dict | None = None) -> pd.DataFrame:
         cfg = self.config
+        unrealized = unrealized or {
+            "open_positions_at_end": 0, "unrealized_position_value": 0.0,
+            "unrealized_pnl_pct": 0.0, "unrealized_nav_contribution": 0.0,
+        }
 
         # portfolio return from NAV (authoritative)
         if not equity_df.empty:
@@ -325,11 +345,13 @@ class SignalBacktester:
             max_dd = 0.0
 
         if trades_df.empty:
-            return pd.DataFrame([{
+            row = {
                 "config_name": cfg.name, "holding_days": cfg.holding_days,
                 "n_trades": 0, "n_stocks": 0, "portfolio_total_return": round(portfolio_total_return, 4),
                 "trade_return_sum": 0.0, "max_drawdown": round(max_dd, 4),
-            }])
+            }
+            row.update(unrealized)
+            return pd.DataFrame([row])
 
         rets = trades_df["net_return_pct"].dropna()
         stock_contrib = trades_df.groupby("stock")["net_return_pct"].sum().sort_values(ascending=False)
@@ -337,17 +359,16 @@ class SignalBacktester:
         trades_copy["ym"] = pd.to_datetime(trades_copy["entry_date"]).dt.strftime("%Y-%m")
         monthly = trades_copy.groupby("ym")["net_return_pct"].sum()
 
-        return pd.DataFrame([{
+        row = {
             "config_name": cfg.name,
             "holding_days": cfg.holding_days,
             "n_trades": len(rets),
             "n_stocks": trades_df["stock"].nunique(),
-            "portfolio_total_return": round(portfolio_total_return, 4),  # NAV 口径
-            "trade_return_sum": round(float(rets.sum()), 3),             # 单笔求和，非组合
+            "portfolio_total_return": round(portfolio_total_return, 4),  # NAV 口径（权威组合收益）
+            "trade_return_sum": round(float(rets.sum()), 3),             # 单笔 net_return_pct 求和，非组合口径
             "avg_ret": round(float(rets.mean()), 3),
             "median_ret": round(float(rets.median()), 3),
             "win_rate": round(float((rets > 0).mean()), 3),
-            "total_return": round(float(rets.sum()), 3),                 # 兼容旧字段=trade_return_sum
             "max_drawdown": round(max_dd, 4),
             "avg_holding_days": round(float(trades_df["holding_days"].mean()), 1),
             "best_stock": stock_contrib.index[0] if len(stock_contrib) else "",
@@ -358,4 +379,6 @@ class SignalBacktester:
             "deferred_exits": int(trades_df["deferred"].sum()) if "deferred" in trades_df.columns else 0,
             "stop_loss_exits": int((trades_df["exit_reason"] == "stop_loss").sum()),
             "take_profit_exits": int((trades_df["exit_reason"] == "take_profit").sum()),
-        }])
+        }
+        row.update(unrealized)
+        return pd.DataFrame([row])

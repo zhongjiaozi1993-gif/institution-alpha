@@ -6,6 +6,9 @@
   - 买入成本不重复扣（入场后 NAV = 1 − 单次买手续费）。
   - 买滑点/卖滑点各体现一次。
   - NAV 可手工复算。
+  - 引擎内部 stock_code zfill(6)（未补零输入仍可匹配 prices）。
+  - summary.total_return 已删除；portfolio_total_return(NAV) 与 trade_return_sum(单笔) 分离。
+  - metrics.compute_full_metrics 接受引擎 trades（net_return_pct schema）。
 
 可直接运行: python3 tests/test_signal_backtester_timeline.py
 或 pytest:  pytest tests/test_signal_backtester_timeline.py
@@ -18,6 +21,7 @@ import pandas as pd
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 from src.backtest.signal_backtester import SignalBacktester, BacktestConfig
+from src.backtest.metrics import compute_full_metrics
 
 DATES = [f"2025-01-{d:02d}" for d in range(1, 11)]  # 10 交易日 d0..d9
 
@@ -120,6 +124,49 @@ def test_nav_manual_recompute():
     # 到期 d4: 卖出 close=12 → cash=0.1*12=1.2; nav=1.2
     assert abs(eq.loc["2025-01-05", "nav"] - 1.2) < 1e-9, eq.loc["2025-01-05", "nav"]
     assert abs(res["trades"].iloc[0]["net_return_pct"] - 20.0) < 1e-6
+
+
+def test_stock_code_zfill_inside_engine():
+    """signal stock_code 传入未补零形式（int 1）→ 引擎内部 zfill(6) 匹配 prices('000001')。"""
+    prices = flat_prices()  # keyed by "000001"
+    cfg = BacktestConfig(holding_days=1, max_positions=1, initial_capital=1.0,
+                         cost_bps=0, slippage_bps=0, name="zf")
+    signals = pd.DataFrame([{"stock_code": 1, "signal_date": "2025-01-03"}])  # 未补零 int
+    res = SignalBacktester(cfg).run(signals, prices)
+    assert len(res["trades"]) == 1, "引擎内部 zfill 后应能匹配 prices 建仓"
+    assert res["trades"].iloc[0]["stock"] == "000001", res["trades"].iloc[0]["stock"]
+
+
+def test_summary_total_return_is_portfolio_not_trade_sum():
+    """summary 删除误导性 total_return；portfolio_total_return(NAV) 与 trade_return_sum(单笔求和) 分离。"""
+    rows = [(10, 10, 10, 10)] * 3          # d0,d1,d2 flat
+    rows += [(10, 12, 10, 11)]             # d3 entry: open=10
+    rows += [(11, 13, 11, 12)]             # d4 maturity: close=12
+    rows += [(12, 12, 12, 12)] * 5         # d5..d9
+    prices = make_prices({"000001": rows})
+    cfg = BacktestConfig(holding_days=1, max_positions=1, initial_capital=1.0,
+                         cost_bps=0, slippage_bps=0, name="sum")
+    res = SignalBacktester(cfg).run(sig("000001", "2025-01-03"), prices)
+    cols = res["summary"].columns
+    assert "total_return" not in cols, "total_return 应删除（不再等于 trade_return_sum）"
+    assert "portfolio_total_return" in cols and "trade_return_sum" in cols
+    s = res["summary"].iloc[0]
+    # NAV 口径 20% → 0.2（小数）；单笔求和 20.0（百分数）。数值不同即证明两口径分离。
+    assert abs(s["portfolio_total_return"] - 0.2) < 1e-6, s["portfolio_total_return"]
+    assert abs(s["trade_return_sum"] - 20.0) < 1e-3, s["trade_return_sum"]
+
+
+def test_metrics_accepts_trades_schema():
+    """compute_full_metrics 接受引擎 trades（net_return_pct schema），返回组合+交易口径且不崩。"""
+    prices = flat_prices(px=10.0)
+    cfg = BacktestConfig(holding_days=1, max_positions=1, initial_capital=1.0,
+                         cost_bps=100, slippage_bps=0, name="m")
+    res = SignalBacktester(cfg).run(sig("000001", "2025-01-03"), prices)
+    m = compute_full_metrics(res["equity_curve"], res["trades"])
+    assert "portfolio_total_return" in m, "应含组合 NAV 口径"
+    assert "trade_return_sum" in m, "应含单笔求和口径"
+    assert m["total_trades"] == 1
+    assert "win_rate" in m
 
 
 def _run_all():

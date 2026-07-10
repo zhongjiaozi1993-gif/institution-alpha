@@ -107,8 +107,8 @@ def main():
     result = bt.run(buys, prices, tradable_flags=flags)
     trades, equity, summary = result["trades"], result["equity_curve"], result["summary"]
 
-    # ---- metrics ----
-    nav_metrics = compute_full_metrics(equity, pd.DataFrame())
+    # ---- metrics（组合 NAV + 交易口径，传真实 trades 不传空表）----
+    metrics = compute_full_metrics(equity, trades)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     prefix = args.output_prefix or cfg.name + ("" if not args.no_flags else "_noflags")
@@ -120,14 +120,15 @@ def main():
     if not summary.empty:
         s = summary.iloc[0]
         print(f"  交易数: {s['n_trades']}  股票数: {s['n_stocks']}  胜率: {s['win_rate']*100:.1f}%")
-        print(f"  平均单笔净收益: {s['avg_ret']:+.3f}%  单笔收益求和: {s['total_return']:+.2f}%(非组合口径)")
+        print(f"  组合总收益(NAV, 权威): {s['portfolio_total_return']*100:+.2f}%")
+        print(f"  单笔收益求和(trade_return_sum, 非组合口径): {s['trade_return_sum']:+.2f}%  平均单笔: {s['avg_ret']:+.3f}%")
         print(f"  最大回撤(NAV): {s['max_drawdown']*100:.2f}%  月度正收益比: {s['monthly_positive_rate']*100:.0f}%")
-        print(f"  最大单票贡献: {s['best_stock']} {s['best_stock_contribution']:+.1f}%  "
-              f"(占累计 {s['best_stock_contribution']/s['total_return']*100:.0f}%)" if s['total_return'] else "")
-        print(f"  止损/止盈退出: {s['stop_loss_exits']}/{s['take_profit_exits']}")
-    for k in ["annualized_return", "sharpe_ratio", "max_drawdown", "calmar_ratio"]:
-        if k in nav_metrics:
-            print(f"  {k}: {nav_metrics[k]}")
+        print(f"  止损/止盈退出: {s['stop_loss_exits']}/{s['take_profit_exits']}  顺延退出(deferred_exits): {s['deferred_exits']}")
+        print(f"  期末未平仓: {s['open_positions_at_end']} 笔  未实现市值: {s['unrealized_position_value']:.2f}  "
+              f"未实现盈亏: {s['unrealized_pnl_pct']:+.2f}%  占NAV: {s['unrealized_nav_contribution']*100:.1f}%")
+    for k in ["annualized_return", "sharpe_ratio", "sortino_ratio", "calmar_ratio"]:
+        if k in metrics:
+            print(f"  {k}: {metrics[k]}")
     print(f"\n输出: {OUT_DIR}/{prefix}_trades.csv, _equity.csv")
 
 

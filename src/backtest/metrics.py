@@ -1,7 +1,7 @@
 """
 回测绩效评估指标（Phase 4.6：兼容 signal_backtester 当前 trades schema）。
 
-- NAV 口径（组合）: total_return / portfolio_total_return, annualized, sharpe, max_dd ...
+- NAV 口径（组合）: portfolio_total_return, annualized, sharpe, max_dd ...
 - 交易口径: 支持 net_return_pct（不再要求 pnl / pnl_pct）。
 - 明确区分:
     portfolio_total_return  = 组合 NAV 首末比（权威组合收益）
@@ -40,7 +40,6 @@ def compute_full_metrics(nav_df: pd.DataFrame, trades_df: pd.DataFrame, rf: floa
 
             metrics.update({
                 "portfolio_total_return": round(total_ret, 4),   # 权威组合收益（NAV）
-                "total_return": round(total_ret, 4),             # 兼容旧字段（= portfolio）
                 "annualized_return": round(ann_ret, 4),
                 "annualized_volatility": round(ann_vol, 4),
                 "sharpe_ratio": round(sharpe, 4),

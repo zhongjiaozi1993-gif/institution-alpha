@@ -6,6 +6,7 @@
   - 停牌(suspend_flag=True) 入场日 → 不建仓。
   - 跌停(sellable_flag=False) 到期日 → 不丢失退出事件：pending_exit，下一可卖日按开盘卖出(deferred)。
   - 停牌到期日 → 顺延到下一可交易日卖出，退出事件不丢失。
+  - 停牌到期日 → 登记 pending_exit=maturity，下一可交易日按 **开盘价** 成交(deferred)。
   - 无 flags 时正常建仓（基线）。
 
 可直接运行: python3 tests/test_signal_backtester_tradable_flags.py
@@ -118,6 +119,26 @@ def test_suspend_on_exit_day_does_not_lose_exit():
     assert len(t) == 1, "退出事件不应丢失"
     assert t.iloc[0]["exit_date"] == "2025-01-06", t.iloc[0]["exit_date"]
     assert t.iloc[0]["exit_reason"] == "maturity"
+
+
+def test_suspend_maturity_sets_pending_exit_and_sells_next_open():
+    """到期日 d4 停牌 → 登记 pending_exit=maturity；d5 可交易按 d5 **开盘价** 成交(deferred)。
+    d5 open≠close，专门校验用 open 而非 close。"""
+    rows = [(10, 10, 10, 10)] * 3          # d0..d2
+    rows += [(10, 10, 10, 10)]             # d3 entry
+    rows += [(10, 10, 10, 10)]             # d4 maturity（停牌，不可交易）
+    rows += [(9, 12, 9, 11)]               # d5 可交易：open=9, close=11（不同）
+    rows += [(11, 11, 11, 11)] * 4         # d6..d9
+    prices = make_prices(rows)
+    f = flags([("2025-01-05", True, True, True, True)])  # d4 停牌
+    res = SignalBacktester(cfg()).run(sig("2025-01-03"), prices, tradable_flags=f)
+    t = res["trades"]
+    assert len(t) == 1, "退出事件不应丢失"
+    row = t.iloc[0]
+    assert row["exit_date"] == "2025-01-06", row["exit_date"]
+    assert row["exit_reason"] == "maturity"
+    assert bool(row["deferred"]) is True, "停牌到期应标记 deferred"
+    assert abs(row["exit_price"] - 9.0) < 1e-9, f"应按 d5 开盘价 9 成交, got {row['exit_price']}"
 
 
 def _run_all():
