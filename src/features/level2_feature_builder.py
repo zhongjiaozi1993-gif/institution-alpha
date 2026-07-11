@@ -191,9 +191,11 @@ def compute_day_features(wt: pd.DataFrame | None, cj: pd.DataFrame | None) -> di
 
 
 def build_stock_features(code: str, skipped: list | None = None) -> pd.DataFrame:
-    """遍历某股票 data/single_stock/{code}/raw/{YYYYMMDD}/{wind}/ 的所有交易日。
+    """遍历某股票 data/single_stock/{code}/raw/{YYYYMMDD}/ 的所有交易日。
 
-    个别日 CSV 可能损坏（GB18030 解码失败）→ 跳过该日并记入 skipped，不中断整体构建。
+    逐笔文件可能在 {YYYYMMDD}/{wind}/ 子目录下（深度池），也可能平铺在 {YYYYMMDD}/ 下
+    （事件窗口浅池）；两种结构都读。个别日 CSV 可能损坏（GB18030 解码失败）→ 跳过该日
+    并记入 skipped，不中断整体构建。
     """
     base = SINGLE_STOCK / code / "raw"
     if not base.exists():
@@ -203,6 +205,8 @@ def build_stock_features(code: str, skipped: list | None = None) -> pd.DataFrame
     for day in sorted(d for d in os.listdir(base) if d.isdigit()):
         sdir = base / day / wind
         if not sdir.exists():
+            sdir = base / day              # 平铺结构回退：逐笔文件直接在日期目录下（无 {code}.SZ 子目录）
+        if not (sdir / "逐笔成交.csv").exists():
             continue
         try:
             data = l2.read_level2_stock_dir(sdir)

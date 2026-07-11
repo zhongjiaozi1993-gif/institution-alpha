@@ -115,8 +115,9 @@ def _write_report(df: pd.DataFrame, meta: pd.DataFrame, universe: str, skipped_d
         f.write(f"| 单日≥5股的日数 | {dense_dates}（保留 {dense_rows} 行，可做截面 RankIC） |\n")
         f.write(f"| 平均股票/日 | {n_rows / max(n_dates,1):.1f} |\n")
         f.write(f"| 跳过(损坏CSV)stock-day | {len(skipped_df)} |\n\n")
-        f.write("> Level-2 覆盖不均：少数日有密集面板(≥20只)、多数日为事件式单票拉取。"
-                "截面验证在 ≥5 股的日子上进行。\n\n")
+        f.write("> Level-2 覆盖**时间高度不均**：2025-01 的约 17 个交易日为近全池宽截面（~175 只），"
+                "其余交易日多为 ~27 只深度股（全年逐笔跟踪）。截面验证在 ≥5 股的日子上进行；"
+                "宽截面集中在年初，需注意跨时段可比性。\n\n")
 
         _write_skipped_section(f, skipped_df)
 

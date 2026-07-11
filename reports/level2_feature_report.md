@@ -1,6 +1,6 @@
 # Level-2 日频特征报告（Phase 5, v1）
 
-生成时间: 2026-07-11 01:35  |  universe: Universe_C
+生成时间: 2026-07-11 10:07  |  universe: Universe_C
 
 > 每股每日一行；所有特征仅用 **T 日逐笔**，available_time = **T_close**，无跨日窗口、无未来函数。label 从 T+1 开盘起算，错开可用时点。
 
@@ -11,14 +11,14 @@
 | 指标 | 数值 |
 |---|---|
 | 特征数 | 35 |
-| 行数(stock-day) | 4422 |
-| 股票数 | 27 |
+| 行数(stock-day) | 6928 |
+| 股票数 | 175 |
 | 交易日数 | 296 |
-| 单日≥5股的日数 | 160（保留 4205 行，可做截面 RankIC） |
-| 平均股票/日 | 14.9 |
+| 单日≥5股的日数 | 160（保留 6711 行，可做截面 RankIC） |
+| 平均股票/日 | 23.4 |
 | 跳过(损坏CSV)stock-day | 26 |
 
-> Level-2 覆盖不均：少数日有密集面板(≥20只)、多数日为事件式单票拉取。截面验证在 ≥5 股的日子上进行。
+> Level-2 覆盖**时间高度不均**：2025-01 的约 17 个交易日为近全池宽截面（~175 只），其余交易日多为 ~27 只深度股（全年逐笔跟踪）。截面验证在 ≥5 股的日子上进行；宽截面集中在年初，需注意跨时段可比性。
 
 ## 跳过样本分布（损坏/解码失败）
 
@@ -34,53 +34,53 @@
 
 | 特征 | 分组 | 说明 | 非零率 | 均值 | 标准差 |
 |---|---|---|---|---|---|
-| l2_amount_yi | flow | 当日成交额（亿元） | 100% | 5.3800 | 9.0357 |
-| l2_volume_wan | flow | 当日成交量（万股） | 100% | 4604.6441 | 6581.6253 |
-| l2_trade_count | flow | 逐笔成交笔数 | 100% | 41640.0791 | 49780.0007 |
-| l2_avg_trade_amt_wan | flow | 单笔平均成交额（万元） | 100% | 1.0361 | 0.4619 |
-| l2_active_buy_ratio | flow | 主动买成交额占比（BS=B / 总额） | 100% | 0.4833 | 0.0730 |
-| l2_active_sell_ratio | flow | 主动卖成交额占比（BS=S / 总额） | 100% | 0.5167 | 0.0730 |
-| l2_net_active_ratio | flow | 净主动买入强度 (买-卖)/总额 | 100% | -0.0334 | 0.1460 |
-| l2_intraday_ret | intraday | 日内涨跌幅 (close-open)/open % | 96% | 0.2329 | 2.4302 |
-| l2_close_pos | intraday | 收盘在日内区间位置 (close-low)/(high-low) | 97% | 0.4960 | 0.2955 |
-| l2_vwap_close_dev | intraday | 收盘相对 VWAP 偏离 % | 100% | 0.0080 | 1.0491 |
-| l2_early_net_ratio | session | 早盘 09:30-10:00 净主动买入 / 总额 | 100% | -0.0057 | 0.0611 |
-| l2_late_net_ratio | session | 尾盘 14:30-15:00 净主动买入 / 总额 | 100% | -0.0020 | 0.0288 |
-| l2_super_buy_yi | large | 超大单买入额（亿, ≥100万或≥50万股） | 91% | 0.7150 | 1.9803 |
-| l2_super_sell_yi | large | 超大单卖出额（亿） | 94% | 0.7404 | 1.8766 |
-| l2_super_net_yi | large | 超大单净买入（亿） | 92% | -0.0254 | 0.7666 |
-| l2_big_buy_yi | large | 大单买入额（亿, ≥20万或≥10万股, 不含超大） | 100% | 1.3684 | 2.3467 |
-| l2_big_sell_yi | large | 大单卖出额（亿） | 100% | 1.4335 | 2.4959 |
-| l2_big_net_yi | large | 大单净买入（亿） | 95% | -0.0651 | 0.3953 |
-| l2_super_buy_ratio | large | 超大单买入 / 当日成交额 | 91% | 0.0827 | 0.0741 |
-| l2_big_net_ratio | large | (超大+大)净买入 / 当日成交额 | 97% | -0.0226 | 0.0866 |
-| l2_large_share | large | (超大+大)买卖合计 / 当日成交额（大单参与度） | 100% | 0.6398 | 0.1902 |
-| l2_order_count | large | 成交委托数（匹配后） | 100% | 43847.7510 | 52078.1329 |
-| l2_buy_order_ratio | large | 买方向委托占比（委托代码=B） | 100% | 0.5149 | 0.0795 |
-| l2_avg_order_wan | large | 平均委托金额（万元） | 100% | 2.0155 | 0.8919 |
-| l2_cluster_count | cluster | 拆单集群总数 | 80% | 15.0916 | 16.9081 |
-| l2_buy_cluster_count | cluster | 买入集群数 | 72% | 7.4604 | 8.7664 |
-| l2_sell_cluster_count | cluster | 卖出集群数 | 73% | 7.6312 | 8.5890 |
-| l2_cluster_buy_wan | cluster | 买入集群总额（万元） | 72% | 11165.9375 | 33796.1697 |
-| l2_cluster_sell_wan | cluster | 卖出集群总额（万元） | 73% | 11450.1962 | 34145.4782 |
-| l2_cluster_net_wan | cluster | 集群净买入（万元） | 80% | -284.2587 | 7481.8721 |
-| l2_cluster_buy_intensity | cluster | 机构买入强度 = 买入集群额 / 当日成交额 | 72% | 0.0862 | 0.1088 |
-| l2_max_cluster_wan | cluster | 最大单集群金额（万元） | 80% | 6158.4302 | 21155.4937 |
-| l2_avg_cluster_hhi | cluster | 集群平均拆单集中度 HHI（1=集中,→1/n=均匀） | 80% | 0.1091 | 0.0619 |
-| l2_avg_cluster_orders | cluster | 集群平均拆单笔数 | 80% | 21.0352 | 49.5051 |
-| l2_avg_cluster_vwap_dev | cluster | 集群平均成交价相对 VWAP 偏离 %（正=追价） | 79% | -0.0118 | 0.6721 |
+| l2_amount_yi | flow | 当日成交额（亿元） | 100% | 4.3412 | 7.6457 |
+| l2_volume_wan | flow | 当日成交量（万股） | 100% | 3939.8120 | 5751.9825 |
+| l2_trade_count | flow | 逐笔成交笔数 | 100% | 36148.7276 | 42789.8636 |
+| l2_avg_trade_amt_wan | flow | 单笔平均成交额（万元） | 100% | 0.9697 | 0.4345 |
+| l2_active_buy_ratio | flow | 主动买成交额占比（BS=B / 总额） | 100% | 0.4829 | 0.0720 |
+| l2_active_sell_ratio | flow | 主动卖成交额占比（BS=S / 总额） | 100% | 0.5171 | 0.0720 |
+| l2_net_active_ratio | flow | 净主动买入强度 (买-卖)/总额 | 100% | -0.0342 | 0.1439 |
+| l2_intraday_ret | intraday | 日内涨跌幅 (close-open)/open % | 97% | 0.1034 | 2.4275 |
+| l2_close_pos | intraday | 收盘在日内区间位置 (close-low)/(high-low) | 96% | 0.4808 | 0.3034 |
+| l2_vwap_close_dev | intraday | 收盘相对 VWAP 偏离 % | 100% | -0.0666 | 1.0805 |
+| l2_early_net_ratio | session | 早盘 09:30-10:00 净主动买入 / 总额 | 100% | -0.0046 | 0.0614 |
+| l2_late_net_ratio | session | 尾盘 14:30-15:00 净主动买入 / 总额 | 100% | -0.0030 | 0.0288 |
+| l2_super_buy_yi | large | 超大单买入额（亿, ≥100万或≥50万股） | 90% | 0.5337 | 1.6686 |
+| l2_super_sell_yi | large | 超大单卖出额（亿） | 92% | 0.5538 | 1.5743 |
+| l2_super_net_yi | large | 超大单净买入（亿） | 91% | -0.0201 | 0.6530 |
+| l2_big_buy_yi | large | 大单买入额（亿, ≥20万或≥10万股, 不含超大） | 100% | 1.0743 | 1.9831 |
+| l2_big_sell_yi | large | 大单卖出额（亿） | 100% | 1.1295 | 2.1075 |
+| l2_big_net_yi | large | 大单净买入（亿） | 95% | -0.0553 | 0.3307 |
+| l2_super_buy_ratio | large | 超大单买入 / 当日成交额 | 90% | 0.0711 | 0.0702 |
+| l2_big_net_ratio | large | (超大+大)净买入 / 当日成交额 | 97% | -0.0237 | 0.0832 |
+| l2_large_share | large | (超大+大)买卖合计 / 当日成交额（大单参与度） | 100% | 0.5996 | 0.1863 |
+| l2_order_count | large | 成交委托数（匹配后） | 100% | 38168.7501 | 44727.2246 |
+| l2_buy_order_ratio | large | 买方向委托占比（委托代码=B） | 100% | 0.5152 | 0.0787 |
+| l2_avg_order_wan | large | 平均委托金额（万元） | 100% | 1.8796 | 0.8375 |
+| l2_cluster_count | cluster | 拆单集群总数 | 77% | 12.3909 | 15.3137 |
+| l2_buy_cluster_count | cluster | 买入集群数 | 68% | 6.0888 | 7.9060 |
+| l2_sell_cluster_count | cluster | 卖出集群数 | 70% | 6.3021 | 7.7998 |
+| l2_cluster_buy_wan | cluster | 买入集群总额（万元） | 68% | 8108.1801 | 28100.4396 |
+| l2_cluster_sell_wan | cluster | 卖出集群总额（万元） | 70% | 8326.8281 | 28275.2067 |
+| l2_cluster_net_wan | cluster | 集群净买入（万元） | 77% | -218.6480 | 6355.7492 |
+| l2_cluster_buy_intensity | cluster | 机构买入强度 = 买入集群额 / 当日成交额 | 68% | 0.0696 | 0.0978 |
+| l2_max_cluster_wan | cluster | 最大单集群金额（万元） | 77% | 4494.8385 | 17621.1083 |
+| l2_avg_cluster_hhi | cluster | 集群平均拆单集中度 HHI（1=集中,→1/n=均匀） | 77% | 0.1082 | 0.0653 |
+| l2_avg_cluster_orders | cluster | 集群平均拆单笔数 | 77% | 16.6445 | 41.4693 |
+| l2_avg_cluster_vwap_dev | cluster | 集群平均成交价相对 VWAP 偏离 %（正=追价） | 77% | 0.0026 | 0.5822 |
 
 ## 关键特征分位（p10/p50/p90）
 
 | 特征 | p10 | p50 | p90 |
 |---|---|---|---|
-| l2_net_active_ratio | -0.2154 | -0.0292 | 0.1492 |
-| l2_big_net_ratio | -0.1304 | -0.0226 | 0.0814 |
-| l2_cluster_buy_intensity | 0.0000 | 0.0374 | 0.2473 |
-| l2_cluster_net_wan | -4106.2820 | 0.0000 | 2638.3440 |
-| l2_avg_cluster_hhi | 0.0000 | 0.1212 | 0.1775 |
-| l2_late_net_ratio | -0.0340 | -0.0034 | 0.0301 |
-| l2_intraday_ret | -2.1789 | 0.0883 | 2.8169 |
+| l2_net_active_ratio | -0.2134 | -0.0338 | 0.1487 |
+| l2_big_net_ratio | -0.1243 | -0.0246 | 0.0766 |
+| l2_cluster_buy_intensity | 0.0000 | 0.0268 | 0.2103 |
+| l2_cluster_net_wan | -2814.6830 | 0.0000 | 1543.7180 |
+| l2_avg_cluster_hhi | 0.0000 | 0.1238 | 0.1812 |
+| l2_late_net_ratio | -0.0362 | -0.0038 | 0.0298 |
+| l2_intraday_ret | -2.5129 | 0.0000 | 2.7309 |
 
 ## 样本（最活跃 5 行，按成交额）
 

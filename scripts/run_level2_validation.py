@@ -185,8 +185,9 @@ def _write_report(sdf, features, best_alpha_col, best_alpha_ic, comp_cols, ortho
 
         # ---------- 6. 已知限制 ----------
         f.write("## 6. 已知限制\n\n")
-        f.write("1. 真实 Level-2 面板仅 ~27 只 × ~160 日（Universe_C 名义 175，多数无逐笔成交），"
-                "截面窄、单年，RankIC 波动大，ICIR 更可信。\n")
+        f.write("1. 面板**时间高度不均**：Universe_C 名义 175 只全部产出特征，但仅 2025-01 的 ~17 个交易日"
+                "为近全池宽截面（~175 只/日），其余 ~140 日仅 ~27 只深度股；关键地，**OOS test 窗口（9–12 月）"
+                "仅 26 只**。宽度集中在 train 前段，test 端仍窄——扩池主要增强样本内截面，OOS 结论仍受 test 端窄面板限制。\n")
         f.write("2. OOS 仅单一 train/test 切分（8月末），非滚动、非多折；test 仅 ~4 个月。\n")
         f.write("3. 融合为 IC 加权线性（非 ML）；Phase 9 用 LightGBM 精化并做滚动 OOS。\n")
         f.write("4. 超额基准为中证1000（idx_000852），Universe_C 多为小盘，基准合理。\n")
