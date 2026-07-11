@@ -24,7 +24,19 @@ from src.registry import universe_registry as reg
 OUT_DIR = PROJECT / "data" / "processed" / "level2"
 FEATURES_PATH = OUT_DIR / "level2_daily_features.parquet"
 META_PATH = OUT_DIR / "level2_feature_metadata.parquet"
+SKIPPED_PATH = OUT_DIR / "level2_skipped_stock_days.csv"
 REPORT = PROJECT / "reports" / "level2_feature_report.md"
+
+
+def _skipped_frame(skipped: list) -> pd.DataFrame:
+    """[{symbol, day, reason}] → DataFrame(symbol, day, trade_date, month, reason)。"""
+    if not skipped:
+        return pd.DataFrame(columns=["symbol", "day", "trade_date", "month", "reason"])
+    df = pd.DataFrame(skipped)
+    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+    df["trade_date"] = pd.to_datetime(df["day"], format="%Y%m%d", errors="coerce")
+    df["month"] = df["trade_date"].dt.strftime("%Y-%m")
+    return df.sort_values(["symbol", "day"]).reset_index(drop=True)
 
 
 def main():
@@ -49,14 +61,33 @@ def main():
     df.to_parquet(FEATURES_PATH, index=False)
     meta.to_parquet(META_PATH, index=False)
     print(f"Saved {len(df)} rows × {len(fb.FEATURE_NAMES)} feats → {FEATURES_PATH}")
-    if skipped:
-        print(f"Skipped {len(skipped)} unreadable stock-days (corrupt CSV)")
 
-    _write_report(df, meta, args.universe, skipped)
+    skipped_df = _skipped_frame(skipped)
+    skipped_df.to_csv(SKIPPED_PATH, index=False)
+    print(f"Skipped {len(skipped_df)} unreadable stock-days → {SKIPPED_PATH}")
+
+    _write_report(df, meta, args.universe, skipped_df)
     print(f"Report → {REPORT}")
 
 
-def _write_report(df: pd.DataFrame, meta: pd.DataFrame, universe: str, skipped: list):
+def _write_skipped_section(f, skipped_df: pd.DataFrame):
+    """报告中的跳过样本分布（按原因 / 按月 / 按股票 top）。"""
+    f.write("## 跳过样本分布（损坏/解码失败）\n\n")
+    if skipped_df.empty:
+        f.write("无跳过样本。\n\n")
+        return
+    f.write(f"共跳过 **{len(skipped_df)}** 个 stock-day，明细见 "
+            "`data/processed/level2/level2_skipped_stock_days.csv`。\n\n")
+    by_reason = skipped_df["reason"].value_counts()
+    f.write("**按原因**：" + "，".join(f"{k}={v}" for k, v in by_reason.items()) + "\n\n")
+    by_month = skipped_df["month"].value_counts().sort_index()
+    if len(by_month):
+        f.write("**按月**：" + "，".join(f"{k}={v}" for k, v in by_month.items()) + "\n\n")
+    by_sym = skipped_df["symbol"].value_counts().head(10)
+    f.write("**按股票(top10)**：" + "，".join(f"{k}={v}" for k, v in by_sym.items()) + "\n\n")
+
+
+def _write_report(df: pd.DataFrame, meta: pd.DataFrame, universe: str, skipped_df: pd.DataFrame):
     feat_cols = fb.FEATURE_NAMES
     n_rows = len(df)
     n_stocks = df["symbol"].nunique()
@@ -83,9 +114,11 @@ def _write_report(df: pd.DataFrame, meta: pd.DataFrame, universe: str, skipped: 
         f.write(f"| 交易日数 | {n_dates} |\n")
         f.write(f"| 单日≥5股的日数 | {dense_dates}（保留 {dense_rows} 行，可做截面 RankIC） |\n")
         f.write(f"| 平均股票/日 | {n_rows / max(n_dates,1):.1f} |\n")
-        f.write(f"| 跳过(损坏CSV)stock-day | {len(skipped)} |\n\n")
+        f.write(f"| 跳过(损坏CSV)stock-day | {len(skipped_df)} |\n\n")
         f.write("> Level-2 覆盖不均：少数日有密集面板(≥20只)、多数日为事件式单票拉取。"
                 "截面验证在 ≥5 股的日子上进行。\n\n")
+
+        _write_skipped_section(f, skipped_df)
 
         f.write("## 特征清单（分组）\n\n")
         f.write("| 特征 | 分组 | 说明 | 非零率 | 均值 | 标准差 |\n|---|---|---|---|---|---|\n")

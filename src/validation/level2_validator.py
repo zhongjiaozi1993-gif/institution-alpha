@@ -1,15 +1,16 @@
-"""Level-2 特征验证器（Phase 5）。
+"""Level-2 特征验证器（Phase 5 / 5.1）。
 
 复用 Alpha191 验证管线的核心函数（factor_validator._daily_corr /
 _quintile_spread_turnover），但改用 **open-to-open 超额收益**（label_*d_excess_index）
 作为 fwd，在 **Universe_C**（有 Level-2 数据的股票）上验证每个 Level-2 特征。
 
-产出三类证据（暂不做 ML）:
-  1. 单特征稳定性: 各 horizon(1/3/5/10d) 的 RankIC / RankICIR / spread / 覆盖。
-  2. 与 Alpha191 的正交性: |相关| 越低越说明信息不重叠。
-  3. 增量证明（无 ML）: 在同一批 Level-2 stock-day 上，比较
-       RankIC(Alpha191 最优) vs RankIC(Level-2 最优) vs RankIC(等权 rank 融合)，
-     若融合 > 单独，即 Level-2 对 Alpha191 有增量。
+产出（暂不做 ML）:
+  1. 单特征稳定性: 各 horizon 的 RankIC / RankICIR / spread + IC/spread 各自有效天数。
+  2. 与 Alpha191 的正交性（5.1 修正）: **按 trade_date 每日 Spearman** 后汇总
+     mean / median / abs_mean / n_days（不再 pooled）。
+  3. 样本内增量: 全样本 IC 加权融合 vs 单独。
+  4. OOS 增量（5.1 新增）: train(≤8月)选 top-k/方向/权重，test(≥9月)固定参数只评估，
+     对比 Alpha191 单独 / L2 综合分 / 融合。
 
 注: 超额 = label − 指数收益（同日对所有股票是同一常数），因此 RankIC / 多空 spread
 与用原始 label 完全一致；超额仅令分位绝对收益反映“是否跑赢中证1000”。
@@ -71,9 +72,10 @@ def validate_feature(feat_df: pd.DataFrame, fwd: pd.DataFrame, feature: str) -> 
         else:
             res[f"RankIC_{h}d"] = res[f"RankICIR_{h}d"] = np.nan
             res[f"ic_n_days_{h}d"] = 0
-        spread, topq, botq, _ = fv._quintile_spread_turnover(merged, fc)
+        spread, topq, botq, top_sets = fv._quintile_spread_turnover(merged, fc)
         res[f"spread_{h}d"] = spread
         res[f"cost_adj_spread_{h}d"] = spread - COST if not np.isnan(spread) else np.nan
+        res[f"spread_n_days_{h}d"] = len(top_sets)   # spread 实际有效天数（≠ IC 有效日）
     return res
 
 
@@ -102,34 +104,65 @@ def _rankic_of_column(merged: pd.DataFrame, col: str, fwd_col: str) -> tuple[flo
     return float(ic["RankIC"].mean()), (float(ic["RankIC"].mean() / std) if std > 0 else 0.0), int(len(ic))
 
 
+def _eval_signal(merged: pd.DataFrame, col: str, fwd_col: str) -> dict:
+    """给定并入 fwd 的表，评估某信号列: RankIC/RankICIR/IC有效日 + spread/扣费spread/spread有效日。"""
+    tmp = merged[["trade_date", "symbol", col, fwd_col]].rename(columns={col: "signal_value"})
+    ic = fv._daily_corr(tmp, fwd_col)
+    if len(ic):
+        std = ic["RankIC"].std()
+        rankic = float(ic["RankIC"].mean())
+        rankicir = float(rankic / std) if std > 0 else 0.0
+    else:
+        rankic = rankicir = np.nan
+    spread, topq, botq, top_sets = fv._quintile_spread_turnover(tmp, fwd_col)
+    return {
+        "rankic": rankic, "rankicir": rankicir, "ic_n_days": int(len(ic)),
+        "spread": spread, "cost_adj_spread": (spread - COST if not np.isnan(spread) else np.nan),
+        "spread_n_days": len(top_sets),
+    }
+
+
 def orthogonality(feat_df: pd.DataFrame, alpha_wide: pd.DataFrame,
-                  l2_feature: str, top_k: int = 8) -> pd.DataFrame:
-    """Level-2 特征与各 Alpha191 的截面 Spearman 相关（越低越正交）。返回 |corr| 最大的 top_k。"""
+                  l2_feature: str, top_k: int = 8, min_per_day: int = 5,
+                  min_days: int = 5) -> pd.DataFrame:
+    """Level-2 特征与各 Alpha191 的**每日** Spearman 相关，再汇总（不再 pooled）。
+
+    每个交易日截面上算 Spearman（≥min_per_day 只），再对各日相关汇总:
+      mean / median / abs_mean / n_days。返回按 abs_mean 降序的 top_k。
+    """
     m = feat_df[["trade_date", "symbol", l2_feature]].merge(
         alpha_wide, on=["trade_date", "symbol"], how="inner")
     a_cols = [c for c in alpha_wide.columns if c.startswith("a_")]
     rows = []
     for a in a_cols:
-        v = m[[l2_feature, a]].dropna()
-        if len(v) < 30:
+        daily = []
+        for _, g in m.groupby("trade_date"):
+            v = g[[l2_feature, a]].dropna()
+            if len(v) < min_per_day:
+                continue
+            c = v[l2_feature].corr(v[a], method="spearman")
+            if pd.notna(c):
+                daily.append(c)
+        if len(daily) < min_days:
             continue
+        arr = np.asarray(daily, dtype=float)
         rows.append({"alpha": a.replace("a_", ""),
-                     "spearman": round(float(v[l2_feature].corr(v[a], method="spearman")), 4)})
+                     "mean": round(float(arr.mean()), 4),
+                     "median": round(float(np.median(arr)), 4),
+                     "abs_mean": round(float(np.abs(arr).mean()), 4),
+                     "n_days": int(len(arr))})
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-    out["abs"] = out["spearman"].abs()
-    return out.sort_values("abs", ascending=False).head(top_k).drop(columns="abs").reset_index(drop=True)
+    return out.sort_values("abs_mean", ascending=False).head(top_k).reset_index(drop=True)
 
 
-def build_l2_composite(feat_df: pd.DataFrame, fwd: pd.DataFrame, features: list[str],
-                       horizon: int = 5, k: int = 6) -> tuple[pd.DataFrame, list[str]]:
-    """把 top-k 个（按 |RankICIR_{h}d|）Level-2 特征做**符号对齐的等权 z 分**合成一个综合分。
+def _select_composite_params(feat_df: pd.DataFrame, fwd: pd.DataFrame, features: list[str],
+                             horizon: int = 5, k: int = 6) -> tuple[list[str], dict]:
+    """在给定样本上按 |RankICIR_{h}d| 选 top-k 特征并定方向（符号=RankIC 符号）。
 
-    弱但正交的多个特征聚合可提取增量。返回 (含 l2_composite 列的表, 入选特征名)。
-    注: top-k 选择与符号对齐用全样本 IC，属**样本内**方向性证据（OOS 留待 Phase 9）。
+    仅用传入的 feat_df（OOS 时传 train 子集），不看 test。返回 (入选列, 符号)。
     """
-    fc = f"fwd_{horizon}d"
     scored = []
     for c in features:
         r = validate_feature(feat_df, fwd, c)
@@ -138,8 +171,11 @@ def build_l2_composite(feat_df: pd.DataFrame, fwd: pd.DataFrame, features: list[
     scored.sort(key=lambda x: abs(x[2]) if not np.isnan(x[2]) else 0, reverse=True)
     chosen = scored[:k]
     signs = {c: (1.0 if ic >= 0 else -1.0) for c, ic, _ in chosen}
-    cols = [c for c, _, _ in chosen]
+    return [c for c, _, _ in chosen], signs
 
+
+def _apply_composite(feat_df: pd.DataFrame, cols: list[str], signs: dict) -> pd.DataFrame:
+    """把已定的特征/方向应用到给定 stock-day：逐日 rank→符号→z 分→等权，得 l2_composite。"""
     parts = []
     for date, g in feat_df.groupby("trade_date"):
         if len(g) < 5:
@@ -150,10 +186,20 @@ def build_l2_composite(feat_df: pd.DataFrame, fwd: pd.DataFrame, features: list[
             v = g[c].rank() * signs[c]
             z = (v - v.mean()) / v.std() if v.std() > 0 else v * 0
             z_sum = z_sum + z.to_numpy()
-        g["l2_composite"] = z_sum / len(cols)
+        g["l2_composite"] = z_sum / max(len(cols), 1)
         parts.append(g[["trade_date", "symbol", "l2_composite"]])
-    comp = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["trade_date", "symbol", "l2_composite"])
-    return comp, cols
+    return (pd.concat(parts, ignore_index=True) if parts
+            else pd.DataFrame(columns=["trade_date", "symbol", "l2_composite"]))
+
+
+def build_l2_composite(feat_df: pd.DataFrame, fwd: pd.DataFrame, features: list[str],
+                       horizon: int = 5, k: int = 6) -> tuple[pd.DataFrame, list[str]]:
+    """全样本综合分：top-k（按 |RankICIR_{h}d|）符号对齐等权 z 分。返回 (含 l2_composite 表, 入选列)。
+
+    注: 全样本选择/对齐 → **样本内**方向性证据；严格 OOS 见 oos_validation。
+    """
+    cols, signs = _select_composite_params(feat_df, fwd, features, horizon, k)
+    return _apply_composite(feat_df, cols, signs), cols
 
 
 def incremental_test(alpha_wide: pd.DataFrame, fwd: pd.DataFrame,
@@ -218,3 +264,101 @@ def pick_best_alpha(alpha_wide: pd.DataFrame, fwd: pd.DataFrame, horizon: int = 
         if not np.isnan(ic) and abs(ic) > abs(best_ic):
             best_col, best_ic = a, ic
     return best_col, best_ic
+
+
+def _fuse_column(base: pd.DataFrame, alpha_col: str, comp_col: str,
+                 w_a: float, w_l: float, sign_a: float, sign_l: float) -> pd.DataFrame:
+    """逐日构造融合列: fused = w_a·z(rank(alpha)·sign_a) + w_l·z(rank(comp)·sign_l)。"""
+    parts = []
+    for _, g in base.groupby("trade_date"):
+        if len(g) < 5:
+            continue
+        g = g.copy()
+        ra = g[alpha_col].rank() * sign_a
+        rl = g[comp_col].rank() * sign_l
+        za = (ra - ra.mean()) / ra.std() if ra.std() > 0 else ra * 0
+        zl = (rl - rl.mean()) / rl.std() if rl.std() > 0 else rl * 0
+        g["fused"] = w_a * za + w_l * zl
+        parts.append(g[["trade_date", "symbol", "fused"]])
+    return (pd.concat(parts, ignore_index=True) if parts
+            else pd.DataFrame(columns=["trade_date", "symbol", "fused"]))
+
+
+def oos_validation(feat_df: pd.DataFrame, alpha_wide: pd.DataFrame, fwd: pd.DataFrame,
+                   features: list[str], horizon: int = 5, k: int = 6,
+                   train_end: str = "2025-08-31", test_start: str = "2025-09-01") -> dict:
+    """样本外增量：train 选参（top-k/方向/权重/最优 alpha），test 固定参数只评估。
+
+    test 上三者在**同一批 stock-day**（综合分∩alpha∩fwd）上比较:
+      Alpha191 单独 / L2 综合分 / 融合 → RankIC_{h}d / RankICIR_{h}d / spread_{h}d。
+    无 test 端信息用于选择，避免泄漏。
+    """
+    fc = f"fwd_{horizon}d"
+    te, ts = pd.Timestamp(train_end), pd.Timestamp(test_start)
+    train_feat = feat_df[feat_df["trade_date"] <= te]
+    test_feat = feat_df[feat_df["trade_date"] >= ts]
+
+    # ---- 1) train 选参 ----
+    cols, signs = _select_composite_params(train_feat, fwd, features, horizon, k)
+    alpha_tr = alpha_wide[alpha_wide["trade_date"] <= te]
+    best_alpha_col, _ = pick_best_alpha(alpha_tr, fwd, horizon)
+    if best_alpha_col is None or not cols:
+        return {"error": "train 选参失败", "horizon": horizon}
+
+    # ---- 2) train 端 IC → 融合权重/方向 ----
+    comp_tr = _apply_composite(train_feat, cols, signs)
+    base_tr = (comp_tr.merge(alpha_wide[["trade_date", "symbol", best_alpha_col]],
+                             on=["trade_date", "symbol"], how="inner")
+               .merge(fwd[["trade_date", "symbol", fc]], on=["trade_date", "symbol"], how="left")
+               .dropna(subset=["l2_composite", best_alpha_col, fc]))
+    ic_a_tr, _, _ = _rankic_of_column(base_tr, best_alpha_col, fc)
+    ic_l_tr, _, _ = _rankic_of_column(base_tr, "l2_composite", fc)
+    sign_a = np.sign(ic_a_tr) if not np.isnan(ic_a_tr) and ic_a_tr != 0 else 1.0
+    sign_l = np.sign(ic_l_tr) if not np.isnan(ic_l_tr) and ic_l_tr != 0 else 1.0
+    w_a = abs(ic_a_tr) if not np.isnan(ic_a_tr) else 0.0
+    w_l = abs(ic_l_tr) if not np.isnan(ic_l_tr) else 0.0
+
+    # ---- 3) test 端固定参数评估（同一 stock-day 网格；均按 train 方向定向）----
+    comp_te = _apply_composite(test_feat, cols, signs)
+    base_te = (comp_te.merge(alpha_wide[["trade_date", "symbol", best_alpha_col]],
+                             on=["trade_date", "symbol"], how="inner")
+               .merge(fwd[["trade_date", "symbol", fc]], on=["trade_date", "symbol"], how="left")
+               .dropna(subset=["l2_composite", best_alpha_col, fc]))
+    if base_te.empty:
+        return {"error": "test 样本不足", "horizon": horizon}
+
+    # alpha 按 train 方向定向（committed direction）；L2 综合分构造时已含 train 方向。
+    base_te = base_te.copy()
+    base_te["alpha_directed"] = base_te[best_alpha_col] * sign_a
+    ev_alpha = _eval_signal(base_te, "alpha_directed", fc)     # train-directed（可承诺的方向）
+    ev_alpha_raw = _eval_signal(base_te, best_alpha_col, fc)    # 未定向（透明起见）
+    ev_l2 = _eval_signal(base_te, "l2_composite", fc)
+    fused = _fuse_column(base_te, best_alpha_col, "l2_composite", w_a, w_l, sign_a, sign_l)
+    m_fused = fused.merge(base_te[["trade_date", "symbol", fc]], on=["trade_date", "symbol"], how="left")
+    ev_fused = _eval_signal(m_fused, "fused", fc)
+
+    l2_gen = (not np.isnan(ev_l2["rankic"])) and ev_l2["rankic"] > 0
+    alpha_gen = (not np.isnan(ev_alpha["rankic"])) and ev_alpha["rankic"] > 0
+    fused_gen = (not np.isnan(ev_fused["rankic"])) and ev_fused["rankic"] > 0
+    # OOS 名义增量: 融合方向泛化(>0) 且 定向融合 RankIC 高于 定向 alpha。
+    inc = bool(fused_gen and not np.isnan(ev_alpha["rankic"])
+               and ev_fused["rankic"] > ev_alpha["rankic"] + 1e-6)
+    # OOS 稳健增量（同 horizon）: 名义增量 且 L2 综合分自身在 test 方向泛化(>0)。
+    # 避免跨 horizon 拼接（如 5d 上 L2 泛化但融合无增量 / 10d 上融合有增量但 L2 未泛化）。
+    robust = bool(inc and l2_gen)
+    return {
+        "horizon": horizon, "train_end": train_end, "test_start": test_start,
+        "chosen": cols, "best_alpha": best_alpha_col.replace("a_", ""),
+        "sign_a": float(sign_a), "sign_l": float(sign_l),
+        "w_a": round(w_a, 4), "w_l": round(w_l, 4),
+        "train_ic_alpha": round(ic_a_tr, 4) if not np.isnan(ic_a_tr) else np.nan,
+        "train_ic_l2": round(ic_l_tr, 4) if not np.isnan(ic_l_tr) else np.nan,
+        "n_train_dates": int(train_feat["trade_date"].nunique()),
+        "n_test_dates": int(test_feat["trade_date"].nunique()),
+        "test_alpha": ev_alpha, "test_alpha_raw_rankic": round(ev_alpha_raw["rankic"], 4)
+        if not np.isnan(ev_alpha_raw["rankic"]) else np.nan,
+        "test_l2": ev_l2, "test_fused": ev_fused,
+        "alpha_generalizes": bool(alpha_gen), "l2_generalizes": bool(l2_gen),
+        "fused_generalizes": bool(fused_gen), "incremental_oos": inc,
+        "robust_incremental": robust,
+    }
