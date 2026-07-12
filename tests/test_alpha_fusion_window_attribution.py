@@ -116,7 +116,7 @@ def test_open_to_open_exit_matches_label_horizon():
     h = 3
     entry = dates[1]                                   # 建仓日
     exp = opens[1 + h] / opens[1] - 1.0                # open[entry+h]/open[entry]-1
-    got = bt.trade_oo_gross_return(prices, "000001", entry, h, dates)
+    got = bt.trade_oo_gross_return(prices, "000001", entry, h)
     assert abs(got - exp) < 1e-12
     # 越界（无 entry+h）→ NaN
-    assert np.isnan(bt.trade_oo_gross_return(prices, "000001", dates[-1], h, dates))
+    assert np.isnan(bt.trade_oo_gross_return(prices, "000001", dates[-1], h))

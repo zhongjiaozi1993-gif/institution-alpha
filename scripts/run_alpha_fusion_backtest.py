@@ -30,6 +30,7 @@ from src.fusion import alpha_rule_fusion as arf
 from src.validation import factor_validator as fv
 from src.backtest.signal_backtester import SignalBacktester, BacktestConfig
 from src.backtest.metrics import compute_full_metrics
+from src.backtest.open_to_open import forward_open_return
 
 DAILY_DIR = PROJECT / "data" / "daily"
 FLAGS_PATH = PROJECT / "data" / "processed" / "tradable" / "tradable_flags.parquet"
@@ -160,34 +161,26 @@ def executed_entry_exposure(trades: pd.DataFrame, controls: pd.DataFrame) -> dic
 # ======================================================================
 # 退出口径对照（T+1 open → T+1+h open，与 IC 标签一致）
 # ======================================================================
-def trade_oo_gross_return(prices: dict, stock: str, entry_date: str, h: int,
-                          all_dates: list[str]) -> float:
-    """单笔 open→open 毛收益 = open[entry+h]/open[entry] − 1（与 label horizon 同口径）。"""
-    idx = {d: i for i, d in enumerate(all_dates)}
-    if entry_date not in idx:
-        return np.nan
-    ei = idx[entry_date] + h
-    if ei >= len(all_dates):
-        return np.nan
-    exit_date = all_dates[ei]
+def trade_oo_gross_return(prices: dict, stock: str, entry_date: str, h: int) -> float:
+    """单笔 open→open 毛收益 = open[entry+h]/open[entry] − 1。
+
+    entry+h 为该股**自己**日线序列中 entry 后第 h 个有效日（停牌=缺失行，自动跳过），
+    与 label_builder._open_to_open_labels 完全同口径；不用全局日历，避免停牌错位。
+    """
     pdf = prices.get(str(stock).zfill(6))
     if pdf is None:
         return np.nan
-    o_in = pdf.loc[pdf["date_str"] == entry_date, "open_yuan"]
-    o_out = pdf.loc[pdf["date_str"] == exit_date, "open_yuan"]
-    if o_in.empty or o_out.empty or float(o_in.iloc[0]) <= 0:
-        return np.nan
-    return float(o_out.iloc[0]) / float(o_in.iloc[0]) - 1.0
+    return forward_open_return(pdf, entry_date, h)
 
 
-def oo_trade_returns(trades: pd.DataFrame, prices: dict, h: int, all_dates: list[str],
+def oo_trade_returns(trades: pd.DataFrame, prices: dict, h: int,
                      slip: float, cost: float) -> pd.Series:
     """实际成交在 open→open 口径下的每笔净收益%（复用引擎的成交决定，仅换退出价）。"""
     if trades is None or trades.empty:
         return pd.Series(dtype=float)
     rets = []
     for _, t in trades.iterrows():
-        g = trade_oo_gross_return(prices, t["stock"], t["entry_date"], h, all_dates)
+        g = trade_oo_gross_return(prices, t["stock"], t["entry_date"], h)
         if np.isnan(g):
             rets.append(np.nan); continue
         # 与引擎口径一致：买入 open×(1+slip)、卖出 open×(1−slip)，买卖各扣一次费
@@ -208,7 +201,7 @@ def _sharpe_of_trades(r: pd.Series) -> float:
 # ======================================================================
 # 单方案运行（返回原始 equity/trades + 归因，绩效在主流程截断后统一算）
 # ======================================================================
-def run_one(name: str, scheme: dict, test_panel, prices, all_dates, flags, controls,
+def run_one(name: str, scheme: dict, test_panel, prices, flags, controls,
             fwd, horizon: int) -> dict:
     scores = arf.build_scheme_scores(test_panel, scheme)
     buys = scores_to_buys(scores, TOP_N)
@@ -227,7 +220,7 @@ def run_one(name: str, scheme: dict, test_panel, prices, all_dates, flags, contr
     rankicir = float(rankic / ic["RankIC"].std()) if len(ic) and ic["RankIC"].std() > 0 else np.nan
 
     # 退出口径对照
-    oo_r = oo_trade_returns(trades, prices, horizon, all_dates, SLIP_BPS / 1e4, COST_BPS / 1e4)
+    oo_r = oo_trade_returns(trades, prices, horizon, SLIP_BPS / 1e4, COST_BPS / 1e4)
     close_r = trades["net_return_pct"] if (trades is not None and not trades.empty) else pd.Series(dtype=float)
 
     return {
@@ -434,10 +427,10 @@ def main():
         _, test_panel, _ = arf.purge_train_test(panel, h)
         codes = sorted(test_panel["symbol"].unique())
         prices = load_prices(codes, TEST_START, PRICE_END)
-        all_dates = sorted({d for pdf in prices.values() for d in pdf["date_str"].values})
-        print(f"  prices loaded: {len(prices)} stocks, {len(all_dates)} dates")
+        n_dates = len({d for pdf in prices.values() for d in pdf["date_str"].values})
+        print(f"  prices loaded: {len(prices)} stocks, {n_dates} dates")
 
-        raws = {name: run_one(name, fit["schemes"][name], test_panel, prices, all_dates,
+        raws = {name: run_one(name, fit["schemes"][name], test_panel, prices,
                               flags, controls, fwd, h) for name in SCHEMES}
         cee = common_eval_end([raws[n]["trades"] for n in SCHEMES])
         rr = {name: finalize_metrics(raws[name], cee) for name in SCHEMES}
