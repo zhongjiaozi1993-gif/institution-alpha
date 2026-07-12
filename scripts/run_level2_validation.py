@@ -33,6 +33,19 @@ def main():
     print(f"Level-2 features: {len(features)} | rows {len(feat_df)} | "
           f"stocks {feat_df['symbol'].nunique()} | dates {feat_df['trade_date'].nunique()}")
 
+    # 面板宽度统计（供报告披露，替代旧的 175/27/26 只叙述）
+    per_day = feat_df.groupby("trade_date")["symbol"].nunique()
+    oos_per_day = feat_df[feat_df["trade_date"] >= pd.Timestamp(TEST_START)].groupby("trade_date")["symbol"].nunique()
+    panel = {
+        "n_stocks": int(feat_df["symbol"].nunique()),
+        "n_dates": int(feat_df["trade_date"].nunique()),
+        "avg_per_day": float(per_day.mean()),
+        "oos_dates": int(oos_per_day.shape[0]),
+        "oos_avg_per_day": float(oos_per_day.mean()) if len(oos_per_day) else 0.0,
+        "oos_min_per_day": int(oos_per_day.min()) if len(oos_per_day) else 0,
+        "oos_max_per_day": int(oos_per_day.max()) if len(oos_per_day) else 0,
+    }
+
     # ---- 1. 单特征稳定性 ----
     rows = [lv.validate_feature(feat_df, fwd, c) for c in features]
     sdf = pd.DataFrame(rows)
@@ -59,7 +72,7 @@ def main():
     oos10 = lv.oos_validation(feat_df, alpha_wide, fwd, features, horizon=10, k=6,
                               train_end=TRAIN_END, test_start=TEST_START)
 
-    _write_report(sdf, features, best_alpha_col, best_alpha_ic, comp_cols, ortho, inc5, inc10, oos5, oos10)
+    _write_report(sdf, features, best_alpha_col, best_alpha_ic, comp_cols, ortho, inc5, inc10, oos5, oos10, panel)
     print(f"Report → {REPORT}")
     print(f"L2 composite ({len(comp_cols)}): {', '.join(comp_cols)}")
     print(f"样本内增量(5d): fused={inc5.get('rankic_fused')} vs alpha={inc5.get('rankic_alpha')} "
@@ -83,15 +96,17 @@ def _oos_incremental_any(oos5, oos10):
                 ("error" not in oos10 and oos10.get("incremental_oos")))
 
 
-def _write_report(sdf, features, best_alpha_col, best_alpha_ic, comp_cols, ortho, inc5, inc10, oos5, oos10):
+def _write_report(sdf, features, best_alpha_col, best_alpha_ic, comp_cols, ortho, inc5, inc10, oos5, oos10, panel):
     n_keep = int(((sdf["RankIC_5d"].abs() > 0.015) & (sdf["RankICIR_5d"].abs() > 0.30)).sum())
     with open(REPORT, "w") as f:
-        f.write("# Level-2 特征验证报告（Phase 5 / 5.1）\n\n")
-        f.write(f"生成时间: {pd.Timestamp.now():%Y-%m-%d %H:%M}  |  universe: Universe_C  |  "
+        f.write("# Level-2 特征验证报告（Phase 5.2B）\n\n")
+        f.write(f"生成时间: {pd.Timestamp.now():%Y-%m-%d %H:%M}  |  面板: 全 L2 交集面板 "
+                f"**{panel['n_stocks']} 只 / {panel['n_dates']} 交易日**（日均 {panel['avg_per_day']:.0f} 只/日）  |  "
                 f"label: open-to-open **超额**(vs 中证1000), 无未来函数\n\n")
         f.write("> 复用 Alpha191 验证管线的 IC/分位函数；fwd = label_*d_excess_index。\n")
         f.write("> 超额只影响分位绝对收益；RankIC/spread 与原始 label 完全一致。\n")
-        f.write(f"> OOS: train ≤ {TRAIN_END}，test ≥ {TEST_START}；train 选参、test 固定评估。\n\n---\n\n")
+        f.write(f"> OOS: train ≤ {TRAIN_END}，test ≥ {TEST_START}；train 选参、test 固定评估，"
+                f"**含 purge/embargo**（丢弃 label 越过 test_start 的 train 尾部样本）。\n\n---\n\n")
 
         # ---------- 1. 单特征稳定性 ----------
         f.write("## 1. 单特征截面稳定性（按 |RankIC_5d| 排序）\n\n")
@@ -138,21 +153,34 @@ def _write_report(sdf, features, best_alpha_col, best_alpha_ic, comp_cols, ortho
 
         # ---------- 4. OOS 增量 ----------
         f.write("## 4. 样本外(OOS)增量（train 选参 / test 固定评估）\n\n")
+        f.write("**purge 披露**（逐 horizon：先按 label_end_date < test_start 剔除，再叠加 embargo 额外隔离）:\n\n")
+        f.write("| horizon | 末 train 信号日 | 末 train label 结束日 | 首 test 日 | embargo | purge删行(含embargo) |\n")
+        f.write("|---|---|---|---|---|---|\n")
+        for oos in (oos5, oos10):
+            if "error" in oos:
+                f.write(f"| {oos.get('horizon','?')}d | (样本不足) | — | — | — | — |\n")
+                continue
+            f.write(f"| {oos['horizon']}d | {oos['purged_train_end']} | {oos['last_train_label_end_date']} | "
+                    f"{oos['first_test_trade_date']} | {oos['embargo']} | "
+                    f"{oos['purged_rows']}({oos['embargo_rows']}) |\n")
+        f.write("\n> 每个 horizon 的**末 train label 结束日均严格早于首 test 日**，确认 train 标签不窥探 "
+                "test 期收益；embargo 为额外隔离交易日（非替代 horizon purge）。\n\n")
         if "error" not in oos5:
-            f.write(f"train ≤ {oos5['train_end']}（{oos5['n_train_dates']} 日）选出综合分特征 "
+            f.write(f"train ≤ {oos5['purged_train_end']}（purge 后, embargo={oos5['embargo']} 交易日；"
+                    f"{oos5['n_train_dates']} 日）选出综合分特征 "
                     f"**{', '.join(oos5['chosen'])}**，最优 alpha=**{oos5['best_alpha']}**，"
                     f"权重 w_a={oos5['w_a']}/w_l={oos5['w_l']}；test ≥ {oos5['test_start']}"
                     f"（{oos5['n_test_dates']} 日）固定评估。\n\n")
             f.write("> **口径**：alpha 与 L2 综合分都按 **train 端方向**定向后再评估（committed direction，"
                     "OOS 不允许用 test 端符号），融合 = w_a·z(alpha_定向)+w_l·z(L2_定向)。表中 Alpha191 = "
                     "train-定向后的 RankIC。\n\n")
-            # 参照 alpha 方向是否在 OOS 反转（train-定向 vs 未定向 raw）
+            # 参照 alpha 方向是否在 OOS 反转：比较 train 原始符号(sign_a) 与 test 原始符号
             for oos in (oos5, oos10):
                 da, raw = oos["test_alpha"]["rankic"], oos["test_alpha_raw_rankic"]
-                flip = (not np.isnan(da)) and (not np.isnan(raw)) and (da < 0 < raw or raw < 0 < da)
+                flip = lv.alpha_direction_flipped(oos.get("sign_a", 1.0), raw)
                 f.write(f"> {oos['horizon']}d 参照 alpha=**{oos['best_alpha']}**：train 方向 sign_a="
                         f"{oos['sign_a']:+.0f}，test 上 train-定向 RankIC={fmt(da)} / 未定向 raw={fmt(raw)}"
-                        f"{'　→ **方向在 OOS 反转**（train 上有效的符号到 test 失效）' if flip else ''}。\n")
+                        f"{'　→ **方向在 OOS 反转**（train 上有效的符号到 test 失效）' if flip else '　→ 方向 OOS 一致'}。\n")
             f.write("\n")
         f.write("| horizon | 信号 | test RankIC | test RankICIR | test spread% | IC有效日 | spread有效日 |\n")
         f.write("|---|---|---|---|---|---|---|\n")
@@ -185,12 +213,18 @@ def _write_report(sdf, features, best_alpha_col, best_alpha_ic, comp_cols, ortho
 
         # ---------- 6. 已知限制 ----------
         f.write("## 6. 已知限制\n\n")
-        f.write("1. 面板**时间高度不均**：Universe_C 名义 175 只全部产出特征，但仅 2025-01 的 ~17 个交易日"
-                "为近全池宽截面（~175 只/日），其余 ~140 日仅 ~27 只深度股；关键地，**OOS test 窗口（9–12 月）"
-                "仅 26 只**。宽度集中在 train 前段，test 端仍窄——扩池主要增强样本内截面，OOS 结论仍受 test 端窄面板限制。\n")
-        f.write("2. OOS 仅单一 train/test 切分（8月末），非滚动、非多折；test 仅 ~4 个月。\n")
+        f.write(f"1. **面板已扩至全 L2 交集**：{panel['n_stocks']} 只 / {panel['n_dates']} 交易日，日均 "
+                f"{panel['avg_per_day']:.0f} 只/日；**OOS test 窗口（≥{TEST_START}）{panel['oos_dates']} 日、"
+                f"日均 {panel['oos_avg_per_day']:.0f} 只（{panel['oos_min_per_day']}~{panel['oos_max_per_day']}）**。"
+                f"较旧报告的窄面板（名义 175 只、OOS 仅 ~26 只）已大幅拓宽，OOS 截面统计显著性提升。"
+                f"次新股上市前无逐笔导致早期部分日期偏窄，属数据本身。\n")
+        f.write("2. OOS 仅单一 train/test 切分（8月末，含 embargo purge），非滚动、非多折；test ~4 个月。\n")
         f.write("3. 融合为 IC 加权线性（非 ML）；Phase 9 用 LightGBM 精化并做滚动 OOS。\n")
-        f.write("4. 超额基准为中证1000（idx_000852），Universe_C 多为小盘，基准合理。\n")
+        f.write("4. 超额基准为中证1000（idx_000852）。\n")
+        f.write("5. IC 在**全 L2 面板**（未按 tradable_flag 过滤停牌/涨跌停/次新/低流动）计算，"
+                "反映信号横截面秩相关；实盘可交易性收益需叠加 tradable 过滤，属后续融合/回测阶段。\n")
+        f.write("6. Alpha191 仅覆盖 ~776 只，融合/正交性/参照 alpha 的对比在 L2∩Alpha191 交集上；"
+                "单特征 IC 用各自全部可得 stock-day。\n")
 
 
 def _write_grading(f, inc5, inc10, oos5, oos10):
@@ -204,12 +238,11 @@ def _write_grading(f, inc5, inc10, oos5, oos10):
     oos_robust = bool(robust_hz)
     l2_gen_hz = [f"{o['horizon']}d" for o in (oos5, oos10)
                  if "error" not in o and o.get("l2_generalizes")]
-    # 参照 alpha 方向是否在 OOS 反转（train-定向 与 未定向 raw 异号）
+    # 参照 alpha 方向是否在 OOS 反转：train 原始符号(sign_a) 与 test 原始符号异号
     def _flip(o):
         if "error" in o:
             return False
-        da, raw = o["test_alpha"]["rankic"], o.get("test_alpha_raw_rankic", np.nan)
-        return (not np.isnan(da)) and (not np.isnan(raw)) and (da < 0 < raw or raw < 0 < da)
+        return lv.alpha_direction_flipped(o.get("sign_a", 1.0), o.get("test_alpha_raw_rankic", np.nan))
     alpha_flip_hz = [f"{o['horizon']}d" for o in (oos5, oos10) if _flip(o)]
     recommend = oos_robust  # 仅当存在同 horizon 稳健增量才建议
 
@@ -223,6 +256,12 @@ def _write_grading(f, inc5, inc10, oos5, oos10):
     f.write(f"| 参照 Alpha191 OOS 方向稳定性 | "
             f"{('方向反转（' + '/'.join(alpha_flip_hz) + '，train 符号到 test 失效）') if alpha_flip_hz else '未见反转'} |\n")
     f.write(f"| **是否建议进入 Phase 6 规则融合** | **{'建议（小权重增强项）' if recommend else '暂不建议（先纯 Alpha191 融合）'}** |\n\n")
+
+    f.write("> **增量归因（重要）**：该 OOS 增量主要来自**规模 / 成交活跃度 / 流动性反转**代理"
+            "（成交额、大单金额等量级特征负 IC 最强），**不是**已验证的**机构净买入 / 拆单方向** edge"
+            "——净流入、早尾盘净流、聚类净买入等方向变量 |RankIC_5d|≈0。且 L2 综合分与 signal019/040 "
+            "日均 Spearman≈0.77，信息高度重叠。故“OOS 稳健增量：有（10d）”保留，但**不能视作独立机构行为 Alpha**；"
+            "是否只是已有规模因子的重复表达，待 Phase 5.2C 中性化检验后再定性。\n\n")
 
     if alpha_flip_hz:
         f.write(f"> 注意：样本内最优参照 Alpha191 在 OOS（{'/'.join(alpha_flip_hz)}）方向反转——"

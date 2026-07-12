@@ -284,23 +284,86 @@ def _fuse_column(base: pd.DataFrame, alpha_col: str, comp_col: str,
             else pd.DataFrame(columns=["trade_date", "symbol", "fused"]))
 
 
+def alpha_direction_flipped(sign_a: float, raw_test_ic: float) -> bool:
+    """参照 alpha 方向是否在 OOS 反转：train 原始符号(sign_a) 与 test 原始 RankIC 异号。
+
+    注意：不能比较 train-定向 RankIC 与未定向 raw（当 sign_a=-1 时两者恒异号，会误报反转）。
+    正确判据 = sign(train 原始 IC) 与 sign(test 原始 IC) 是否相反，即 sign_a * raw < 0。
+    """
+    return bool((not np.isnan(raw_test_ic)) and (sign_a * raw_test_ic < 0))
+
+
+def purge_split_info(all_dates, train_end: str, test_start: str,
+                     horizon: int, embargo: int = 6) -> tuple[pd.Timestamp | None, dict]:
+    """按 **label_end_date < test_start** 做逐 horizon purge，再叠加 embargo 交易日额外隔离。
+
+    label_hd 用 open[T+1+h]，故信号日 T（交易日历位置 i）的 label 结束日 = 位置 i+1+h。
+    - horizon purge：只保留 all_dates[i+1+h] < test_start 的信号日（最大位置 = pos_first_test-(h+2)）；
+    - embargo：在此基础上再往前多留 embargo 个交易日空档（额外隔离，不替代 horizon purge）。
+    返回 (train_cut_date, info)。info 含 last_train_trade_date / last_train_label_end_date /
+    first_test_trade_date / horizon_cut_date，供报告披露。
+    """
+    ad = np.sort(np.asarray(all_dates, dtype="datetime64[ns]"))
+    n = len(ad)
+    ts = np.datetime64(pd.Timestamp(test_start))
+    te = np.datetime64(pd.Timestamp(train_end))
+    pos = int(np.searchsorted(ad, ts))                  # 首个 >= test_start 的位置
+    first_test = ad[pos] if pos < n else None
+    horizon_cut = pos - (horizon + 2)                   # 最大 i 使 all_dates[i+1+h] < test_start
+    cut = horizon_cut - int(embargo)
+    te_pos = int(np.searchsorted(ad, te, side="right")) - 1   # 不超过传入 train_end
+    if te_pos >= 0:
+        cut = min(cut, te_pos)
+        horizon_cut = min(horizon_cut, te_pos)
+
+    def _d(p):
+        return str(pd.Timestamp(ad[p]).date()) if 0 <= p < n else None
+
+    train_cut_date = pd.Timestamp(ad[cut]) if 0 <= cut < n else None
+    info = {
+        "horizon": horizon, "embargo": int(embargo),
+        "first_test_trade_date": None if first_test is None else str(pd.Timestamp(first_test).date()),
+        "last_train_trade_date": _d(cut),
+        "last_train_label_end_date": _d(cut + 1 + horizon) if 0 <= cut < n else None,
+        "horizon_cut_date": _d(horizon_cut),
+    }
+    return train_cut_date, info
+
+
 def oos_validation(feat_df: pd.DataFrame, alpha_wide: pd.DataFrame, fwd: pd.DataFrame,
                    features: list[str], horizon: int = 5, k: int = 6,
-                   train_end: str = "2025-08-31", test_start: str = "2025-09-01") -> dict:
+                   train_end: str = "2025-08-31", test_start: str = "2025-09-01",
+                   embargo: int | None = None) -> dict:
     """样本外增量：train 选参（top-k/方向/权重/最优 alpha），test 固定参数只评估。
 
     test 上三者在**同一批 stock-day**（综合分∩alpha∩fwd）上比较:
       Alpha191 单独 / L2 综合分 / 融合 → RankIC_{h}d / RankICIR_{h}d / spread_{h}d。
     无 test 端信息用于选择，避免泄漏。
+
+    **purge/embargo**（见 purge_split_info）：label_hd 用 open[T+1+h]，train 尾部信号日的
+    label 会越过 test_start 窥探 test 期。先按 **label_end_date < test_start** 逐 horizon 剔除，
+    再叠加 embargo（默认 6）交易日额外隔离。
     """
     fc = f"fwd_{horizon}d"
     te, ts = pd.Timestamp(train_end), pd.Timestamp(test_start)
-    train_feat = feat_df[feat_df["trade_date"] <= te]
+    emb = 6 if embargo is None else int(embargo)
+
+    # purge：label_end_date < test_start（逐 horizon）+ embargo 额外隔离
+    train_cut, purge_info = purge_split_info(feat_df["trade_date"].unique(),
+                                             train_end, test_start, horizon, emb)
+    if train_cut is None:
+        return {"error": "purge 后无 train 样本", "horizon": horizon}
+    cand = feat_df[feat_df["trade_date"] <= te]
+    train_feat = feat_df[feat_df["trade_date"] <= train_cut]
     test_feat = feat_df[feat_df["trade_date"] >= ts]
+    hcut = pd.Timestamp(purge_info["horizon_cut_date"]) if purge_info["horizon_cut_date"] else train_cut
+    purged_rows = int((cand["trade_date"] > train_cut).sum())
+    purged_horizon_rows = int((cand["trade_date"] > hcut).sum())   # label_end 越界必须删
+    embargo_rows = purged_rows - purged_horizon_rows               # 额外隔离多删的
 
     # ---- 1) train 选参 ----
     cols, signs = _select_composite_params(train_feat, fwd, features, horizon, k)
-    alpha_tr = alpha_wide[alpha_wide["trade_date"] <= te]
+    alpha_tr = alpha_wide[alpha_wide["trade_date"] <= train_cut]
     best_alpha_col, _ = pick_best_alpha(alpha_tr, fwd, horizon)
     if best_alpha_col is None or not cols:
         return {"error": "train 选参失败", "horizon": horizon}
@@ -348,6 +411,12 @@ def oos_validation(feat_df: pd.DataFrame, alpha_wide: pd.DataFrame, fwd: pd.Data
     robust = bool(inc and l2_gen)
     return {
         "horizon": horizon, "train_end": train_end, "test_start": test_start,
+        "embargo": emb,
+        "purged_train_end": purge_info["last_train_trade_date"],
+        "last_train_label_end_date": purge_info["last_train_label_end_date"],
+        "first_test_trade_date": purge_info["first_test_trade_date"],
+        "purged_rows": purged_rows, "purged_horizon_rows": purged_horizon_rows,
+        "embargo_rows": embargo_rows,
         "chosen": cols, "best_alpha": best_alpha_col.replace("a_", ""),
         "sign_a": float(sign_a), "sign_l": float(sign_l),
         "w_a": round(w_a, 4), "w_l": round(w_l, 4),
