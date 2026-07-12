@@ -6,6 +6,7 @@ akshare stock_zh_a_daily() (Sina来源) + stock_zh_index_daily() (Sina来源)
 """
 from __future__ import annotations
 from pathlib import Path
+import socket
 import time
 import random
 import pandas as pd
@@ -21,6 +22,12 @@ DEFAULT_CACHE_DIR = Path(__file__).parent.parent.parent / "data" / "daily"
 # 请求间隔控制（秒），避免Sina API频率限制
 _MIN_REQUEST_GAP = 0.3
 _last_request_time = 0.0
+
+# 网络超时（秒）。akshare 内部用 requests 但不暴露 timeout 参数，requests 默认无超时，
+# 一旦连接被半开/对端不回包会**永久挂起**（曾导致补数进程卡死 1h+）。
+# 用 socket 默认超时兜底：连接与读取任一超过 READ_TIMEOUT 即抛 socket.timeout，交给重试。
+CONNECT_TIMEOUT = 10
+READ_TIMEOUT = 60
 
 
 def _to_sina_symbol(code: str) -> str:
@@ -43,12 +50,17 @@ def _rate_limit():
 
 
 def _fetch_with_retry(fn, max_retries=3, base_delay=2.0):
-    """带指数退避重试的API调用"""
+    """带指数退避重试的API调用，并用 socket 默认超时兜底防止永久挂起。"""
     last_err = None
     for attempt in range(max_retries):
         try:
             _rate_limit()
-            return fn()
+            prev_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(READ_TIMEOUT)
+            try:
+                return fn()
+            finally:
+                socket.setdefaulttimeout(prev_timeout)
         except Exception as e:
             last_err = e
             if attempt < max_retries - 1:

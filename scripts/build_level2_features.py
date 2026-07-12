@@ -28,15 +28,16 @@ SKIPPED_PATH = OUT_DIR / "level2_skipped_stock_days.csv"
 REPORT = PROJECT / "reports" / "level2_feature_report.md"
 
 
-def _skipped_frame(skipped: list) -> pd.DataFrame:
-    """[{symbol, day, reason}] → DataFrame(symbol, day, trade_date, month, reason)。"""
-    if not skipped:
-        return pd.DataFrame(columns=["symbol", "day", "trade_date", "month", "reason"])
-    df = pd.DataFrame(skipped)
-    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
-    df["trade_date"] = pd.to_datetime(df["day"], format="%Y%m%d", errors="coerce")
-    df["month"] = df["trade_date"].dt.strftime("%Y-%m")
-    return df.sort_values(["symbol", "day"]).reset_index(drop=True)
+def _skipped_frame(audit_df: pd.DataFrame) -> pd.DataFrame:
+    """覆盖审计表 → 非 ok 的 stock-day（symbol, day, trade_date, month, reason）。"""
+    cols = ["symbol", "day", "trade_date", "month", "reason"]
+    if audit_df.empty:
+        return pd.DataFrame(columns=cols)
+    sk = audit_df[audit_df["status"] != "ok"].copy()
+    if sk.empty:
+        return pd.DataFrame(columns=cols)
+    sk["reason"] = sk["status"] + ": " + sk["reason"].fillna("")
+    return sk[cols].sort_values(["symbol", "day"]).reset_index(drop=True)
 
 
 def main():
@@ -50,9 +51,8 @@ def main():
         codes = codes[: args.limit]
     print(f"{args.universe}: {len(codes)} stocks → building Level-2 daily features")
 
-    df = fb.build_all_features(codes)
+    df, audit_df = fb.build_all_features(codes)
     meta = fb.feature_metadata()
-    df, skipped = df if isinstance(df, tuple) else (df, [])
     if df.empty:
         print("无特征产出（检查 data/single_stock/*/raw）")
         return
@@ -60,11 +60,12 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     df.to_parquet(FEATURES_PATH, index=False)
     meta.to_parquet(META_PATH, index=False)
+    audit_df.to_csv(OUT_DIR / "level2_coverage_audit.csv", index=False)
     print(f"Saved {len(df)} rows × {len(fb.FEATURE_NAMES)} feats → {FEATURES_PATH}")
 
-    skipped_df = _skipped_frame(skipped)
+    skipped_df = _skipped_frame(audit_df)
     skipped_df.to_csv(SKIPPED_PATH, index=False)
-    print(f"Skipped {len(skipped_df)} unreadable stock-days → {SKIPPED_PATH}")
+    print(f"Skipped {len(skipped_df)} non-ok stock-days → {SKIPPED_PATH}")
 
     _write_report(df, meta, args.universe, skipped_df)
     print(f"Report → {REPORT}")

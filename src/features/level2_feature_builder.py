@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,46 @@ from src.cluster.split_detector import detect_institution_operations
 
 PROJECT = Path(__file__).resolve().parent.parent.parent
 SINGLE_STOCK = PROJECT / "data" / "single_stock"
+
+# 特征版本 + DBSCAN 参数（写入 metadata / run_manifest，防止版本漂移）。
+FEATURE_VERSION = "v1"
+DBSCAN_EPS = 0.15
+DBSCAN_MIN_SAMPLES = 5
+DBSCAN_MIN_TOTAL_WAN = 100.0
+
+TRADE_FILE = "逐笔成交.csv"
+ORDER_FILE = "逐笔委托.csv"
+
+# 覆盖审计的最终列（每个 symbol-day 恰好一行）。
+AUDIT_COLUMNS = [
+    "symbol", "day", "trade_date", "selected_layout",
+    "has_trade_file", "has_order_file", "status", "reason",
+    "n_trades", "n_orders", "feature_version",
+]
+
+
+class LayoutResolution(NamedTuple):
+    selected_dir: Path | None
+    layout_type: str  # wind_subdir / flat_day_dir / no_supported_layout
+    has_trade_file: bool
+    has_order_file: bool
+
+
+def resolve_level2_day_dir(code: str, day_dir: str | Path) -> LayoutResolution:
+    """判定某股票某交易日的逐笔文件所在结构，依据是**实际文件是否存在**（不只是目录）。
+
+    结构 A wind_subdir: {day_dir}/{code}.SZ/逐笔成交.csv
+    结构 B flat_day_dir: {day_dir}/逐笔成交.csv
+
+    两者都有 逐笔成交.csv 时优先 wind_subdir（深度池原始结构）。都没有 → no_supported_layout。
+    """
+    day_dir = Path(day_dir)
+    wind_dir = day_dir / l2._build_wind_code(code)
+    if (wind_dir / TRADE_FILE).exists():
+        return LayoutResolution(wind_dir, "wind_subdir", True, (wind_dir / ORDER_FILE).exists())
+    if (day_dir / TRADE_FILE).exists():
+        return LayoutResolution(day_dir, "flat_day_dir", True, (day_dir / ORDER_FILE).exists())
+    return LayoutResolution(None, "no_supported_layout", False, False)
 
 # 特征名 → 中文说明（既驱动元信息，也用于防止代码与元信息漂移）。
 FEATURE_DESCRIPTIONS: dict[str, str] = {
@@ -166,7 +207,10 @@ def compute_day_features(wt: pd.DataFrame | None, cj: pd.DataFrame | None) -> di
         feats["l2_order_count"] = int(len(wt)) if wt is not None else 0
 
     # ---- DBSCAN 拆单集群 ----
-    ops = detect_institution_operations(wtcj) if not wtcj.empty else []
+    ops = detect_institution_operations(
+        wtcj, eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES,
+        min_total_amount_wan=DBSCAN_MIN_TOTAL_WAN,
+    ) if not wtcj.empty else []
     if ops:
         buy_ops = [op for op in ops if op["direction"] == "BUY"]
         sell_ops = [op for op in ops if op["direction"] == "SELL"]
@@ -190,58 +234,143 @@ def compute_day_features(wt: pd.DataFrame | None, cj: pd.DataFrame | None) -> di
     return feats
 
 
-def build_stock_features(code: str, skipped: list | None = None) -> pd.DataFrame:
-    """遍历某股票 data/single_stock/{code}/raw/{YYYYMMDD}/ 的所有交易日。
+def _audit_row(code: str, day: str, trade_date, res: LayoutResolution) -> dict:
+    return {
+        "symbol": code, "day": day, "trade_date": trade_date,
+        "selected_layout": res.layout_type,
+        "has_trade_file": res.has_trade_file,
+        "has_order_file": res.has_order_file,
+        "status": None, "reason": "",
+        "n_trades": 0, "n_orders": 0,
+        "feature_version": FEATURE_VERSION,
+    }
 
-    逐笔文件可能在 {YYYYMMDD}/{wind}/ 子目录下（深度池），也可能平铺在 {YYYYMMDD}/ 下
-    （事件窗口浅池）；两种结构都读。个别日 CSV 可能损坏（GB18030 解码失败）→ 跳过该日
-    并记入 skipped，不中断整体构建。
+
+def build_stock_features(
+    code: str,
+    single_stock_root: str | Path | None = None,
+    start_day: str | None = None,
+    end_day: str | None = None,
+) -> tuple[pd.DataFrame, list[dict]]:
+    """遍历某股票 {root}/{code}/raw/{YYYYMMDD}/ 的所有交易日 → (特征宽表, 审计行列表)。
+
+    - 支持 wind_subdir 与 flat_day_dir 两种结构（resolve_level2_day_dir 按实际文件判定）。
+    - **每个扫描到的 symbol-day 都产出恰好一行审计**，绝不静默 continue。
+      status ∈ ok / no_supported_layout / empty_trades / decode_error / other_error。
+    - start_day / end_day 为 'YYYYMMDD'（含端点）过滤，避免读取窗口外文件。
+    - 所有特征仅用 T 日当日逐笔，无跨日状态、遍历顺序不影响结果。
     """
-    base = SINGLE_STOCK / code / "raw"
+    root = Path(single_stock_root) if single_stock_root is not None else SINGLE_STOCK
+    base = root / code / "raw"
+    cols = ["trade_date", "symbol", "layout_type"] + FEATURE_NAMES
+    audit_rows: list[dict] = []
+    rows: list[dict] = []
     if not base.exists():
-        return pd.DataFrame()
-    wind = l2._build_wind_code(code)
-    rows = []
-    for day in sorted(d for d in os.listdir(base) if d.isdigit()):
-        sdir = base / day / wind
-        if not sdir.exists():
-            sdir = base / day              # 平铺结构回退：逐笔文件直接在日期目录下（无 {code}.SZ 子目录）
-        if not (sdir / "逐笔成交.csv").exists():
+        return pd.DataFrame(columns=cols), audit_rows
+
+    for day in sorted(d for d in os.listdir(base) if len(d) == 8 and d.isdigit()):
+        if start_day is not None and day < start_day:
             continue
+        if end_day is not None and day > end_day:
+            continue
+        day_dir = base / day
+        trade_date = pd.Timestamp(f"{day[:4]}-{day[4:6]}-{day[6:8]}")
+        res = resolve_level2_day_dir(code, day_dir)
+        audit = _audit_row(code, day, trade_date, res)
+
+        if res.layout_type == "no_supported_layout":
+            audit["status"] = "no_supported_layout"
+            audit["reason"] = "no 逐笔成交.csv in wind_subdir or flat_day_dir"
+            audit_rows.append(audit)
+            continue
+
         try:
-            data = l2.read_level2_stock_dir(sdir)
-            feats = compute_day_features(data.get("逐笔委托"), data.get("逐笔成交"))
-        except Exception as e:  # 损坏文件/解码失败：跳过该 stock-day
-            if skipped is not None:
-                skipped.append({"symbol": code, "day": day, "reason": type(e).__name__})
+            data = l2.read_level2_stock_dir(res.selected_dir)
+            cj = data.get("逐笔成交")
+            wt = data.get("逐笔委托")
+            audit["n_trades"] = int(len(cj)) if cj is not None else 0
+            audit["n_orders"] = int(len(wt)) if wt is not None else 0
+            if cj is None or cj.empty:
+                audit["status"] = "empty_trades"
+                audit["reason"] = "逐笔成交 为空（无有效成交/全撤单/价格<=0）"
+                audit_rows.append(audit)
+                continue
+            feats = compute_day_features(wt, cj)
+        except UnicodeDecodeError as e:
+            audit["status"] = "decode_error"
+            audit["reason"] = f"{type(e).__name__}: {e}"[:300]
+            audit_rows.append(audit)
             continue
+        except Exception as e:  # noqa: BLE001 — 任何其它异常都必须进入审计，不得静默
+            audit["status"] = "other_error"
+            audit["reason"] = f"{type(e).__name__}: {e}"[:300]
+            audit_rows.append(audit)
+            continue
+
         if feats is None:
+            audit["status"] = "empty_trades"
+            audit["reason"] = "compute_day_features 返回 None（无有效成交）"
+            audit_rows.append(audit)
             continue
-        feats["trade_date"] = pd.Timestamp(f"{day[:4]}-{day[4:6]}-{day[6:8]}")
+
+        feats["trade_date"] = trade_date
         feats["symbol"] = code
+        feats["layout_type"] = res.layout_type
         rows.append(feats)
+        audit["status"] = "ok"
+        audit_rows.append(audit)
+
     if not rows:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=cols), audit_rows
     df = pd.DataFrame(rows)
-    return df[["trade_date", "symbol"] + FEATURE_NAMES]
+    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+    return df[cols], audit_rows
 
 
-def build_all_features(codes: list[str], progress: bool = True) -> tuple[pd.DataFrame, list]:
-    """对多只股票逐一构建并纵向拼接。返回 (宽表, 跳过的 stock-day 列表)。"""
+def build_all_features(
+    codes: list[str],
+    single_stock_root: str | Path | None = None,
+    start_day: str | None = None,
+    end_day: str | None = None,
+    progress: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """对多只股票逐一构建并纵向拼接。返回 (特征宽表, 覆盖审计表)。"""
+    cols = ["trade_date", "symbol", "layout_type"] + FEATURE_NAMES
     frames = []
-    skipped: list = []
+    audit_all: list[dict] = []
     for i, code in enumerate(codes, 1):
-        df = build_stock_features(code, skipped=skipped)
+        df, audit_rows = build_stock_features(
+            code, single_stock_root=single_stock_root, start_day=start_day, end_day=end_day)
+        audit_all.extend(audit_rows)
         if not df.empty:
             frames.append(df)
         if progress and (i % 20 == 0 or i == len(codes)):
-            print(f"  [{i}/{len(codes)}] {code}: rows={sum(len(f) for f in frames)} skipped={len(skipped)}",
-                  flush=True)
+            ok = sum(1 for a in audit_all if a["status"] == "ok")
+            print(f"  [{i}/{len(codes)}] {code}: feat_rows={sum(len(f) for f in frames)} "
+                  f"audit_days={len(audit_all)} ok={ok}", flush=True)
+
+    audit_df = audit_frame(audit_all)
     if not frames:
-        return pd.DataFrame(columns=["trade_date", "symbol"] + FEATURE_NAMES), skipped
+        return pd.DataFrame(columns=cols), audit_df
     out = pd.concat(frames, ignore_index=True)
     out["symbol"] = out["symbol"].astype(str).str.zfill(6)
-    return out.sort_values(["trade_date", "symbol"]).reset_index(drop=True), skipped
+    out = out.sort_values(["trade_date", "symbol"]).reset_index(drop=True)
+    return out, audit_df
+
+
+def audit_frame(audit_rows: list[dict]) -> pd.DataFrame:
+    """审计行列表 → 规范化 DataFrame（含 month 便于报告）。"""
+    if not audit_rows:
+        df = pd.DataFrame(columns=AUDIT_COLUMNS)
+        df["month"] = pd.Series(dtype="object")
+        return df
+    df = pd.DataFrame(audit_rows)
+    df["symbol"] = df["symbol"].astype(str).str.zfill(6)
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df["month"] = df["trade_date"].dt.strftime("%Y-%m")
+    df = df[AUDIT_COLUMNS + ["month"]]
+    return df.sort_values(["symbol", "day"]).reset_index(drop=True)
+
 
 
 def feature_metadata() -> pd.DataFrame:
@@ -262,6 +391,10 @@ def feature_metadata() -> pd.DataFrame:
 
     return pd.DataFrame([
         {"feature": n, "description": d, "group": _group(n),
-         "source": "level2", "available_time": "T_close", "version": "v1"}
+         "source": "level2", "available_time": "T_close",
+         "feature_version": FEATURE_VERSION,
+         "dbscan_eps": DBSCAN_EPS,
+         "dbscan_min_samples": DBSCAN_MIN_SAMPLES,
+         "dbscan_min_total_wan": DBSCAN_MIN_TOTAL_WAN}
         for n, d in FEATURE_DESCRIPTIONS.items()
     ])
