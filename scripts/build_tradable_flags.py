@@ -19,6 +19,15 @@ from src.registry import universe_registry as reg
 START, END = "2025-01-01", "2025-12-31"
 OUT = PROJECT / "data" / "processed" / "tradable" / "tradable_flags.parquet"
 REPORT = PROJECT / "reports" / "tradable_report.md"
+L2_FEATURES = PROJECT / "data" / "processed" / "level2" / "level2_daily_features.parquet"
+
+
+def l2_symbols() -> set:
+    """Level-2 特征宽表的股票集合（含未进 universe 过滤的 L2 股票）。"""
+    if not L2_FEATURES.exists():
+        return set()
+    s = pd.read_parquet(L2_FEATURES, columns=["symbol"])["symbol"]
+    return set(s.astype(str).str.zfill(6).unique())
 
 FLAG_COLS = ["suspend_flag", "limit_up_flag", "limit_down_flag", "st_flag",
              "new_stock_flag", "low_liquidity_flag", "buyable_flag",
@@ -28,8 +37,8 @@ FLAG_COLS = ["suspend_flag", "limit_up_flag", "limit_down_flag", "st_flag",
 def main():
     codes = sorted(set().union(*[
         set(reg.load_universe(u)) for u in ["Universe_A", "Universe_B", "Universe_C"]
-    ]))
-    print(f"Building tradable flags for {len(codes)} stocks, {START}~{END}")
+    ]) | l2_symbols())   # 并入全部 L2 池（含未进 universe 的补数股）
+    print(f"Building tradable flags for {len(codes)} stocks (universe union ∪ L2 pool), {START}~{END}")
 
     flags = build_flags(codes, START, END)
     OUT.parent.mkdir(parents=True, exist_ok=True)

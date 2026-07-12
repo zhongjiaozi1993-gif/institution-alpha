@@ -19,7 +19,7 @@ import pandas as pd
 
 PROJECT = Path(__file__).resolve().parent.parent.parent
 DAILY_DIR = PROJECT / "data" / "daily"
-DEFAULT_HORIZONS = [1, 3, 5, 10]
+DEFAULT_HORIZONS = [1, 3, 5, 10, 20]
 INDEX_SYMBOL = "000852"  # 中证1000
 
 
@@ -44,16 +44,18 @@ def _index_labels(start_date: str, end_date: str, horizons: list[int]) -> pd.Dat
     p = DAILY_DIR / f"idx_{INDEX_SYMBOL}.parquet"
     if not p.exists():
         return pd.DataFrame()
+    end_ts = pd.to_datetime(end_date)
     idx = pd.read_parquet(p)
     idx["date"] = pd.to_datetime(idx["date"])
-    idx = idx[(idx["date"] >= start_date) & (idx["date"] <= end_date)].sort_values("date")
+    # 保留 end_date 之后的行用于末端远期出场价，最后再按信号日过滤输出
+    idx = idx[idx["date"] >= start_date].sort_values("date").reset_index(drop=True)
     if idx.empty:
         return pd.DataFrame()
     labels = _open_to_open_labels(idx["open"].to_numpy(float), horizons)
     out = pd.DataFrame({"trade_date": idx["date"].to_numpy()})
     for h in horizons:
         out[f"idx_label_{h}d"] = labels[f"label_{h}d"]
-    return out
+    return out[out["trade_date"] <= end_ts]
 
 
 def build_labels(
@@ -61,6 +63,7 @@ def build_labels(
     horizons: list[int] = DEFAULT_HORIZONS,
 ) -> pd.DataFrame:
     """为给定股票池构建多周期 label + 指数超额 label。"""
+    end_ts = pd.to_datetime(end_date)
     frames = []
     for code in codes:
         code = str(code).zfill(6)
@@ -69,13 +72,15 @@ def build_labels(
             continue
         df = pd.read_parquet(p)
         df["date"] = pd.to_datetime(df["date"])
-        df = df[(df["date"] >= start_date) & (df["date"] <= end_date)].sort_values("date")
+        # 保留 end_date 之后的行用于计算末端 T+1+h 远期出场价，避免年末 label 被截断为 NaN
+        df = df[df["date"] >= start_date].sort_values("date").reset_index(drop=True)
         if df.empty:
             continue
         labels = _open_to_open_labels(df["open"].to_numpy(float), horizons)
         rec = {"trade_date": df["date"].to_numpy(), "symbol": code}
         rec.update(labels)
-        frames.append(pd.DataFrame(rec))
+        one = pd.DataFrame(rec)
+        frames.append(one[one["trade_date"] <= end_ts])   # 输出仅保留窗口内信号日
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)

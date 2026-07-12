@@ -20,6 +20,15 @@ from src.registry import universe_registry as reg
 START, END = "2025-01-01", "2025-12-31"
 OUT = PROJECT / "data" / "processed" / "labels" / "labels.parquet"
 REPORT = PROJECT / "reports" / "label_report.md"
+L2_FEATURES = PROJECT / "data" / "processed" / "level2" / "level2_daily_features.parquet"
+
+
+def l2_symbols() -> set:
+    """Level-2 特征宽表的股票集合（含未进 universe 过滤的 L2 股票）。"""
+    if not L2_FEATURES.exists():
+        return set()
+    s = pd.read_parquet(L2_FEATURES, columns=["symbol"])["symbol"]
+    return set(s.astype(str).str.zfill(6).unique())
 
 
 def universe_symbols() -> tuple[list[str], dict[str, set]]:
@@ -36,7 +45,8 @@ def universe_symbols() -> tuple[list[str], dict[str, set]]:
 
 def main():
     codes, uni_sets = universe_symbols()
-    print(f"Building labels for {len(codes)} stocks (union of universes), {START}~{END}")
+    codes = sorted(set(codes) | l2_symbols())   # 并入全部 L2 池（含未进 universe 的补数股）
+    print(f"Building labels for {len(codes)} stocks (universe union ∪ L2 pool), {START}~{END}")
 
     labels = build_labels(codes, START, END, DEFAULT_HORIZONS)
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +64,9 @@ def main():
         f.write(f"生成时间: {pd.Timestamp.now():%Y-%m-%d}  |  窗口: {START} ~ {END}\n\n")
         f.write("> label 定义: `label_hd = open[T+1+h] / open[T+1] - 1`（T+1 开盘入场，无未来函数）。\n")
         f.write("> 超额 = 个股 - 中证1000(idx_000852) 同窗口收益。单位为小数收益。\n")
-        f.write("> label 仅用于验证/训练，**不可作为 feature**。行业超额因无行业数据未生成。\n\n---\n\n")
+        f.write("> label 仅用于验证/训练，**不可作为 feature**。行业超额因无行业数据未生成。\n")
+        f.write("> **远期覆盖**: 计算远期收益时保留 end_date 之后的行情再按信号日过滤输出，\n")
+        f.write("> 故年末信号日的 label_10d/20d 不再被 end_date 截断为 NaN（残留缺失来自退市/停牌等无远期价个股）。\n\n---\n\n")
 
         f.write("## 概览\n\n")
         f.write(f"- 样本行数: **{len(labels)}**\n")
