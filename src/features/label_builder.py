@@ -19,7 +19,7 @@ import pandas as pd
 
 PROJECT = Path(__file__).resolve().parent.parent.parent
 DAILY_DIR = PROJECT / "data" / "daily"
-DEFAULT_HORIZONS = [1, 3, 5, 10, 20]
+DEFAULT_HORIZONS = [1, 3, 5, 10, 20, 40, 60]
 INDEX_SYMBOL = "000852"  # 中证1000
 
 
